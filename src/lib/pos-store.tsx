@@ -34,20 +34,20 @@ export type Order = {
   profit: number;
   packets: number;
   method: PaymentMethod;
-  splitCash?: number;
-  splitOther?: number;
+  splitCash?: number | undefined;
+  splitOther?: number | undefined;
   amountPaid: number;
   balance: number;
   status: OrderStatus;
   customer: string;
   seller: string;
-  note?: string;
+  note?: string | undefined;
 };
 
 export type Customer = {
   id: string;
   name: string;
-  phone?: string;
+  phone?: string | undefined;
   creditLimit: number;
   balance: number;
   totalPaid: number;
@@ -82,7 +82,7 @@ function slug(name: string) {
 
 function buildSeed(): State {
   const products = SEED_PRODUCTS.map((p) => ({ ...p }));
-  const packetProduct = products[0];
+  const packetProduct = products[0]!;
   const customers = new Map<string, Customer>();
   const orders: Order[] = [];
 
@@ -160,7 +160,7 @@ export type CheckoutInput = {
   amountPaid: number;
   splitCash?: number;
   splitOther?: number;
-  note?: string;
+  note?: string | undefined;
 };
 
 type StoreValue = State & {
