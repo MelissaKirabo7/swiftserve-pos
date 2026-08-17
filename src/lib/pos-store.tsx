@@ -158,8 +158,8 @@ export type CheckoutInput = {
   date: string;
   method: PaymentMethod;
   amountPaid: number;
-  splitCash?: number;
-  splitOther?: number;
+  splitCash?: number | undefined;
+  splitOther?: number | undefined;
   note?: string | undefined;
 };
 
