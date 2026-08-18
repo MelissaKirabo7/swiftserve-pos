@@ -26,11 +26,11 @@ const METHODS: { id: PaymentMethod; label: string; icon: typeof Banknote }[] = [
 export type PaymentResult = {
   method: PaymentMethod;
   amountPaid: number;
-  splitCash?: number;
-  splitOther?: number;
+  splitCash?: number | undefined;
+  splitOther?: number | undefined;
   customer: string;
   date: string;
-  note?: string;
+  note?: string | undefined;
 };
 
 export function PaymentModal({
