@@ -171,7 +171,9 @@ function buildSeed(): State {
     orders: orders.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
     customers: [...customers.values()].sort((a, b) => a.name.localeCompare(b.name)),
     settlements: [],
+    users: SEED_USERS.map((u) => ({ ...u })),
   };
+
 }
 
 export type CheckoutInput = {
