@@ -247,7 +247,11 @@ export function PosProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, seller }));
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ ...state, seller, currentUserId }),
+      );
+
     } catch {
       /* storage full or unavailable */
     }
