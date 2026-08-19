@@ -218,7 +218,9 @@ export function cartTotals(items: CartLine[]) {
 export function PosProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(() => buildSeed());
   const [seller, setSeller] = useState<string>("Aquila");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+
 
   useEffect(() => {
     try {
