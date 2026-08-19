@@ -192,15 +192,69 @@ type StoreValue = State & {
   ready: boolean;
   seller: string;
   setSeller: (name: string) => void;
+  currentUser: User | null;
+  signIn: (name: string, passcode: string) => boolean;
+  signOut: () => void;
+  setPasscode: (userId: string, passcode: string) => void;
+  upsertUser: (u: { id?: string; name: string; role: Role; passcode: string }) => void;
+  deleteUser: (userId: string) => void;
   checkout: (input: CheckoutInput) => Order;
   updateProduct: (id: string, patch: Partial<Product>) => void;
+  addProduct: (p: Omit<Product, "id">) => void;
+  deleteProduct: (id: string) => void;
   restock: (id: string, amount: number) => void;
   voidOrder: (id: string) => void;
   refundOrder: (id: string) => void;
   settleDebt: (customerName: string, amount: number, method: PaymentMethod) => void;
   upsertCustomer: (c: Omit<Customer, "id" | "balance" | "totalPaid" | "totalPackets">) => void;
+  deleteCustomer: (id: string) => void;
+  mergeCustomers: (targetId: string, sourceIds: string[]) => void;
+  purgeTransactions: () => void;
   resetData: () => void;
 };
+
+/** Rough name similarity (0-1) used to flag likely duplicate customer profiles. */
+export function nameSimilarity(a: string, b: string) {
+  const x = a.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const y = b.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const grams = (s: string) => {
+    const out = new Set<string>();
+    for (let i = 0; i < s.length - 1; i += 1) out.add(s.slice(i, i + 2));
+    return out;
+  };
+  const gx = grams(x);
+  const gy = grams(y);
+  if (!gx.size || !gy.size) return 0;
+  let shared = 0;
+  gx.forEach((g) => {
+    if (gy.has(g)) shared += 1;
+  });
+  return (2 * shared) / (gx.size + gy.size);
+}
+
+export function findDuplicateGroups(customers: Customer[], threshold = 0.7) {
+  const groups: Customer[][] = [];
+  const used = new Set<string>();
+  customers.forEach((c, i) => {
+    if (used.has(c.id)) return;
+    const group = [c];
+    customers.slice(i + 1).forEach((other) => {
+      if (used.has(other.id)) return;
+      if (nameSimilarity(c.name, other.name) >= threshold) {
+        group.push(other);
+        used.add(other.id);
+      }
+    });
+    if (group.length > 1) {
+      used.add(c.id);
+      groups.push(group);
+    }
+  });
+  return groups;
+}
+
 
 const PosContext = createContext<StoreValue | null>(null);
 
