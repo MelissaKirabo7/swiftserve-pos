@@ -490,7 +490,125 @@ export function PosProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const deleteCustomer = useCallback((id: string) => {
+    setState((prev) => ({ ...prev, customers: prev.customers.filter((c) => c.id !== id) }));
+  }, []);
+
+  const mergeCustomers = useCallback((targetId: string, sourceIds: string[]) => {
+    setState((prev) => {
+      const target = prev.customers.find((c) => c.id === targetId);
+      if (!target) return prev;
+      const sources = prev.customers.filter(
+        (c) => sourceIds.includes(c.id) && c.id !== targetId,
+      );
+      if (sources.length === 0) return prev;
+      const sourceNames = new Set(sources.map((c) => slug(c.name)));
+
+      const merged: Customer = {
+        ...target,
+        creditLimit: Math.max(target.creditLimit, ...sources.map((c) => c.creditLimit)),
+        balance: target.balance + sources.reduce((t, c) => t + c.balance, 0),
+        totalPaid: target.totalPaid + sources.reduce((t, c) => t + c.totalPaid, 0),
+        totalPackets: target.totalPackets + sources.reduce((t, c) => t + c.totalPackets, 0),
+      };
+
+      return {
+        ...prev,
+        customers: prev.customers
+          .filter((c) => !sourceNames.has(slug(c.name)) || c.id === targetId)
+          .map((c) => (c.id === targetId ? merged : c)),
+        orders: prev.orders.map((o) =>
+          sourceNames.has(slug(o.customer)) ? { ...o, customer: target.name } : o,
+        ),
+        settlements: prev.settlements.map((s) =>
+          sourceNames.has(slug(s.customer)) ? { ...s, customer: target.name } : s,
+        ),
+      };
+    });
+  }, []);
+
+  const addProduct = useCallback<StoreValue["addProduct"]>((input) => {
+    setState((prev) => ({
+      ...prev,
+      products: [...prev.products, { ...input, id: uid("p") }],
+    }));
+  }, []);
+
+  const deleteProduct = useCallback((id: string) => {
+    setState((prev) => ({ ...prev, products: prev.products.filter((p) => p.id !== id) }));
+  }, []);
+
+  const purgeTransactions = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      orders: [],
+      settlements: [],
+      customers: prev.customers.map((c) => ({
+        ...c,
+        balance: 0,
+        totalPaid: 0,
+        totalPackets: 0,
+      })),
+    }));
+  }, []);
+
+  const signIn = useCallback(
+    (name: string, passcode: string) => {
+      const user = state.users.find(
+        (u) => u.name.toLowerCase() === name.trim().toLowerCase() && u.passcode === passcode,
+      );
+      if (!user) return false;
+      setCurrentUserId(user.id);
+      if (user.role !== "superadmin") setSeller(user.name);
+      return true;
+    },
+    [state.users],
+  );
+
+  const signOut = useCallback(() => setCurrentUserId(null), []);
+
+  const setPasscode = useCallback((userId: string, passcode: string) => {
+    setState((prev) => ({
+      ...prev,
+      users: prev.users.map((u) => (u.id === userId ? { ...u, passcode } : u)),
+    }));
+  }, []);
+
+  const upsertUser = useCallback<StoreValue["upsertUser"]>((input) => {
+    setState((prev) => {
+      const existing = input.id
+        ? prev.users.find((u) => u.id === input.id)
+        : prev.users.find((u) => u.name.toLowerCase() === input.name.toLowerCase());
+      if (existing) {
+        return {
+          ...prev,
+          users: prev.users.map((u) =>
+            u.id === existing.id
+              ? { ...u, name: input.name, role: input.role, passcode: input.passcode }
+              : u,
+          ),
+        };
+      }
+      return {
+        ...prev,
+        users: [
+          ...prev.users,
+          { id: uid("u"), name: input.name, role: input.role, passcode: input.passcode },
+        ],
+      };
+    });
+  }, []);
+
+  const deleteUser = useCallback((userId: string) => {
+    setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
+  }, []);
+
   const resetData = useCallback(() => setState(buildSeed()), []);
+
+  const currentUser = useMemo(
+    () => state.users.find((u) => u.id === currentUserId) ?? null,
+    [state.users, currentUserId],
+  );
 
   const value = useMemo<StoreValue>(
     () => ({
@@ -498,29 +616,52 @@ export function PosProvider({ children }: { children: ReactNode }) {
       ready,
       seller,
       setSeller,
+      currentUser,
+      signIn,
+      signOut,
+      setPasscode,
+      upsertUser,
+      deleteUser,
       checkout,
       updateProduct,
+      addProduct,
+      deleteProduct,
       restock,
       voidOrder,
       refundOrder,
       settleDebt,
       upsertCustomer,
+      deleteCustomer,
+      mergeCustomers,
+      purgeTransactions,
       resetData,
     }),
     [
       state,
       ready,
       seller,
+      currentUser,
+      signIn,
+      signOut,
+      setPasscode,
+      upsertUser,
+      deleteUser,
       checkout,
       updateProduct,
+      addProduct,
+      deleteProduct,
       restock,
       voidOrder,
       refundOrder,
       settleDebt,
       upsertCustomer,
+      deleteCustomer,
+      mergeCustomers,
+      purgeTransactions,
       resetData,
     ],
   );
+
 
   return <PosContext.Provider value={value}>{children}</PosContext.Provider>;
 }
