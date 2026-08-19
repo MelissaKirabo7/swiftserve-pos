@@ -224,17 +224,20 @@ export function PosProvider({ children }: { children: ReactNode }) {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as State & { seller?: string };
+        const parsed = JSON.parse(raw) as State & { seller?: string; currentUserId?: string };
         if (parsed.products && parsed.orders) {
           setState({
             products: parsed.products,
             orders: parsed.orders,
             customers: parsed.customers ?? [],
             settlements: parsed.settlements ?? [],
+            users: parsed.users?.length ? parsed.users : SEED_USERS.map((u) => ({ ...u })),
           });
         }
         if (parsed.seller) setSeller(parsed.seller);
+        if (parsed.currentUserId) setCurrentUserId(parsed.currentUserId);
       }
+
     } catch {
       /* ignore corrupted storage */
     }
