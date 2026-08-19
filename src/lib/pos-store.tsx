@@ -63,12 +63,35 @@ export type Settlement = {
   note?: string;
 };
 
+export type Role = "superadmin" | "owner" | "rep";
+
+export type User = {
+  id: string;
+  name: string;
+  role: Role;
+  passcode: string;
+};
+
+export const ROLE_LABEL: Record<Role, string> = {
+  superadmin: "Superadmin",
+  owner: "Business Owner",
+  rep: "Sales Rep",
+};
+
+export const SEED_USERS: User[] = [
+  { id: "u-super", name: "Superadmin", role: "superadmin", passcode: "0000" },
+  { id: "u-aquila", name: "Aquila", role: "owner", passcode: "1111" },
+  { id: "u-jeremy", name: "Jeremy", role: "rep", passcode: "2222" },
+];
+
 type State = {
   products: Product[];
   orders: Order[];
   customers: Customer[];
   settlements: Settlement[];
+  users: User[];
 };
+
 
 const STORAGE_KEY = "aquila-pos-v1";
 
