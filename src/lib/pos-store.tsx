@@ -63,12 +63,35 @@ export type Settlement = {
   note?: string;
 };
 
+export type Role = "superadmin" | "owner" | "rep";
+
+export type User = {
+  id: string;
+  name: string;
+  role: Role;
+  passcode: string;
+};
+
+export const ROLE_LABEL: Record<Role, string> = {
+  superadmin: "Superadmin",
+  owner: "Business Owner",
+  rep: "Sales Rep",
+};
+
+export const SEED_USERS: User[] = [
+  { id: "u-super", name: "Superadmin", role: "superadmin", passcode: "0000" },
+  { id: "u-aquila", name: "Aquila", role: "owner", passcode: "1111" },
+  { id: "u-jeremy", name: "Jeremy", role: "rep", passcode: "2222" },
+];
+
 type State = {
   products: Product[];
   orders: Order[];
   customers: Customer[];
   settlements: Settlement[];
+  users: User[];
 };
+
 
 const STORAGE_KEY = "aquila-pos-v1";
 
@@ -148,7 +171,9 @@ function buildSeed(): State {
     orders: orders.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
     customers: [...customers.values()].sort((a, b) => a.name.localeCompare(b.name)),
     settlements: [],
+    users: SEED_USERS.map((u) => ({ ...u })),
   };
+
 }
 
 export type CheckoutInput = {
@@ -167,15 +192,69 @@ type StoreValue = State & {
   ready: boolean;
   seller: string;
   setSeller: (name: string) => void;
+  currentUser: User | null;
+  signIn: (name: string, passcode: string) => boolean;
+  signOut: () => void;
+  setPasscode: (userId: string, passcode: string) => void;
+  upsertUser: (u: { id?: string; name: string; role: Role; passcode: string }) => void;
+  deleteUser: (userId: string) => void;
   checkout: (input: CheckoutInput) => Order;
   updateProduct: (id: string, patch: Partial<Product>) => void;
+  addProduct: (p: Omit<Product, "id">) => void;
+  deleteProduct: (id: string) => void;
   restock: (id: string, amount: number) => void;
   voidOrder: (id: string) => void;
   refundOrder: (id: string) => void;
   settleDebt: (customerName: string, amount: number, method: PaymentMethod) => void;
   upsertCustomer: (c: Omit<Customer, "id" | "balance" | "totalPaid" | "totalPackets">) => void;
+  deleteCustomer: (id: string) => void;
+  mergeCustomers: (targetId: string, sourceIds: string[]) => void;
+  purgeTransactions: () => void;
   resetData: () => void;
 };
+
+/** Rough name similarity (0-1) used to flag likely duplicate customer profiles. */
+export function nameSimilarity(a: string, b: string) {
+  const x = a.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const y = b.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const grams = (s: string) => {
+    const out = new Set<string>();
+    for (let i = 0; i < s.length - 1; i += 1) out.add(s.slice(i, i + 2));
+    return out;
+  };
+  const gx = grams(x);
+  const gy = grams(y);
+  if (!gx.size || !gy.size) return 0;
+  let shared = 0;
+  gx.forEach((g) => {
+    if (gy.has(g)) shared += 1;
+  });
+  return (2 * shared) / (gx.size + gy.size);
+}
+
+export function findDuplicateGroups(customers: Customer[], threshold = 0.7) {
+  const groups: Customer[][] = [];
+  const used = new Set<string>();
+  customers.forEach((c, i) => {
+    if (used.has(c.id)) return;
+    const group = [c];
+    customers.slice(i + 1).forEach((other) => {
+      if (used.has(other.id)) return;
+      if (nameSimilarity(c.name, other.name) >= threshold) {
+        group.push(other);
+        used.add(other.id);
+      }
+    });
+    if (group.length > 1) {
+      used.add(c.id);
+      groups.push(group);
+    }
+  });
+  return groups;
+}
+
 
 const PosContext = createContext<StoreValue | null>(null);
 
@@ -193,23 +272,28 @@ export function cartTotals(items: CartLine[]) {
 export function PosProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(() => buildSeed());
   const [seller, setSeller] = useState<string>("Aquila");
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+
 
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as State & { seller?: string };
+        const parsed = JSON.parse(raw) as State & { seller?: string; currentUserId?: string };
         if (parsed.products && parsed.orders) {
           setState({
             products: parsed.products,
             orders: parsed.orders,
             customers: parsed.customers ?? [],
             settlements: parsed.settlements ?? [],
+            users: parsed.users?.length ? parsed.users : SEED_USERS.map((u) => ({ ...u })),
           });
         }
         if (parsed.seller) setSeller(parsed.seller);
+        if (parsed.currentUserId) setCurrentUserId(parsed.currentUserId);
       }
+
     } catch {
       /* ignore corrupted storage */
     }
@@ -219,7 +303,11 @@ export function PosProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, seller }));
+      window.localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ ...state, seller, currentUserId }),
+      );
+
     } catch {
       /* storage full or unavailable */
     }
@@ -402,7 +490,125 @@ export function PosProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const deleteCustomer = useCallback((id: string) => {
+    setState((prev) => ({ ...prev, customers: prev.customers.filter((c) => c.id !== id) }));
+  }, []);
+
+  const mergeCustomers = useCallback((targetId: string, sourceIds: string[]) => {
+    setState((prev) => {
+      const target = prev.customers.find((c) => c.id === targetId);
+      if (!target) return prev;
+      const sources = prev.customers.filter(
+        (c) => sourceIds.includes(c.id) && c.id !== targetId,
+      );
+      if (sources.length === 0) return prev;
+      const sourceNames = new Set(sources.map((c) => slug(c.name)));
+
+      const merged: Customer = {
+        ...target,
+        creditLimit: Math.max(target.creditLimit, ...sources.map((c) => c.creditLimit)),
+        balance: target.balance + sources.reduce((t, c) => t + c.balance, 0),
+        totalPaid: target.totalPaid + sources.reduce((t, c) => t + c.totalPaid, 0),
+        totalPackets: target.totalPackets + sources.reduce((t, c) => t + c.totalPackets, 0),
+      };
+
+      return {
+        ...prev,
+        customers: prev.customers
+          .filter((c) => !sourceNames.has(slug(c.name)) || c.id === targetId)
+          .map((c) => (c.id === targetId ? merged : c)),
+        orders: prev.orders.map((o) =>
+          sourceNames.has(slug(o.customer)) ? { ...o, customer: target.name } : o,
+        ),
+        settlements: prev.settlements.map((s) =>
+          sourceNames.has(slug(s.customer)) ? { ...s, customer: target.name } : s,
+        ),
+      };
+    });
+  }, []);
+
+  const addProduct = useCallback<StoreValue["addProduct"]>((input) => {
+    setState((prev) => ({
+      ...prev,
+      products: [...prev.products, { ...input, id: uid("p") }],
+    }));
+  }, []);
+
+  const deleteProduct = useCallback((id: string) => {
+    setState((prev) => ({ ...prev, products: prev.products.filter((p) => p.id !== id) }));
+  }, []);
+
+  const purgeTransactions = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      orders: [],
+      settlements: [],
+      customers: prev.customers.map((c) => ({
+        ...c,
+        balance: 0,
+        totalPaid: 0,
+        totalPackets: 0,
+      })),
+    }));
+  }, []);
+
+  const signIn = useCallback(
+    (name: string, passcode: string) => {
+      const user = state.users.find(
+        (u) => u.name.toLowerCase() === name.trim().toLowerCase() && u.passcode === passcode,
+      );
+      if (!user) return false;
+      setCurrentUserId(user.id);
+      if (user.role !== "superadmin") setSeller(user.name);
+      return true;
+    },
+    [state.users],
+  );
+
+  const signOut = useCallback(() => setCurrentUserId(null), []);
+
+  const setPasscode = useCallback((userId: string, passcode: string) => {
+    setState((prev) => ({
+      ...prev,
+      users: prev.users.map((u) => (u.id === userId ? { ...u, passcode } : u)),
+    }));
+  }, []);
+
+  const upsertUser = useCallback<StoreValue["upsertUser"]>((input) => {
+    setState((prev) => {
+      const existing = input.id
+        ? prev.users.find((u) => u.id === input.id)
+        : prev.users.find((u) => u.name.toLowerCase() === input.name.toLowerCase());
+      if (existing) {
+        return {
+          ...prev,
+          users: prev.users.map((u) =>
+            u.id === existing.id
+              ? { ...u, name: input.name, role: input.role, passcode: input.passcode }
+              : u,
+          ),
+        };
+      }
+      return {
+        ...prev,
+        users: [
+          ...prev.users,
+          { id: uid("u"), name: input.name, role: input.role, passcode: input.passcode },
+        ],
+      };
+    });
+  }, []);
+
+  const deleteUser = useCallback((userId: string) => {
+    setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
+  }, []);
+
   const resetData = useCallback(() => setState(buildSeed()), []);
+
+  const currentUser = useMemo(
+    () => state.users.find((u) => u.id === currentUserId) ?? null,
+    [state.users, currentUserId],
+  );
 
   const value = useMemo<StoreValue>(
     () => ({
@@ -410,29 +616,52 @@ export function PosProvider({ children }: { children: ReactNode }) {
       ready,
       seller,
       setSeller,
+      currentUser,
+      signIn,
+      signOut,
+      setPasscode,
+      upsertUser,
+      deleteUser,
       checkout,
       updateProduct,
+      addProduct,
+      deleteProduct,
       restock,
       voidOrder,
       refundOrder,
       settleDebt,
       upsertCustomer,
+      deleteCustomer,
+      mergeCustomers,
+      purgeTransactions,
       resetData,
     }),
     [
       state,
       ready,
       seller,
+      currentUser,
+      signIn,
+      signOut,
+      setPasscode,
+      upsertUser,
+      deleteUser,
       checkout,
       updateProduct,
+      addProduct,
+      deleteProduct,
       restock,
       voidOrder,
       refundOrder,
       settleDebt,
       upsertCustomer,
+      deleteCustomer,
+      mergeCustomers,
+      purgeTransactions,
       resetData,
     ],
   );
+
 
   return <PosContext.Provider value={value}>{children}</PosContext.Provider>;
 }
