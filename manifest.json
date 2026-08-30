@@ -1,0 +1,57 @@
+{
+  "background_color": "#ffffff",
+  "description": "Fast touch register for product grid, live carts, split payments and credit sales.\nAn easy to use Point of Sale System",
+  "dir": "ltr",
+  "display": "standalone",
+  "name": "Swift Serve POS",
+  "orientation": "any",
+  "scope": "/",
+  "short_name": "Swift Serve POS",
+  "start_url": "/https://sale-smooth.lovable.app/",
+  "theme_color": "#add9eb",
+  "icons": [
+    {
+      "src": "https://sale-smooth.lovable.app/favicon.ico",
+      "type": "image/x-icon",
+      "isSquare": false,
+      "isPng": false,
+      "isWebp": false,
+      "isJpg": false,
+      "width": 0,
+      "is512x512": false,
+      "is256x256": false,
+      "is192x192": false
+    },
+    {
+      "src": "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/b14685dabad8445100e710b427c7d247/id-preview-7a35db96--a74450a3-c882-4c23-b27e-9e7ef6031b52.lovable.app-1787169479858.png",
+      "type": "image/png",
+      "sizes": "1920x1080",
+      "isSquare": false,
+      "isPng": true,
+      "isWebp": false,
+      "isJpg": false,
+      "width": 1920,
+      "is512x512": false,
+      "is256x256": false,
+      "is192x192": false
+    },
+    {
+      "src": "https://sale-smooth.lovable.app/favicon.ico",
+      "type": "image/x-icon",
+      "isSquare": false,
+      "isPng": false,
+      "isWebp": false,
+      "isJpg": false,
+      "width": 0,
+      "is512x512": false,
+      "is256x256": false,
+      "is192x192": false
+    }
+  ],
+  "id": "SSPOS",
+  "lang": "en",
+  "categories": [
+    "business",
+    "finance"
+  ]
+}
