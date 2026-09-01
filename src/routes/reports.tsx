@@ -37,14 +37,26 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
 }
 
 function ReportsPage() {
-  const { orders, customers, settlements } = usePos();
+  const { orders, customers, settlements, currentUser } = usePos();
   const [day, setDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const repOnly = currentUser?.role === "rep";
 
   const live = useMemo(
-    () => orders.filter((o) => o.status !== "Voided" && o.status !== "Refunded"),
-    [orders],
+    () =>
+      orders.filter(
+        (o) =>
+          o.status !== "Voided" &&
+          o.status !== "Refunded" &&
+          (!repOnly || o.seller === currentUser?.name),
+      ),
+    [orders, repOnly, currentUser],
   );
   const dayOrders = useMemo(() => live.filter((o) => o.date === day), [live, day]);
+  const creditOrders = useMemo(
+    () => dayOrders.filter((o) => o.balance > 0),
+    [dayOrders],
+  );
+
 
   const sum = (list: typeof live, pick: (o: (typeof live)[number]) => number) =>
     list.reduce((total, o) => total + pick(o), 0);
