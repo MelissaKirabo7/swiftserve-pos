@@ -253,6 +253,33 @@ function ReportsPage() {
               ) : null}
             </ul>
           </div>
+          <div className="mt-3">
+            <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              Credit issued today · customer &amp; sales rep
+            </h3>
+            <ul className="mt-1.5 space-y-1 text-sm">
+              {creditOrders.map((o) => (
+                <li
+                  key={o.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary px-2.5 py-1.5"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{o.customer}</span>
+                    <span className="text-[11px] text-muted-foreground numeric">
+                      {o.id} · rep {o.seller} · paid {formatMoney(o.amountPaid)}
+                    </span>
+                  </span>
+                  <span className="numeric font-semibold text-destructive">
+                    {formatMoney(o.balance)}
+                  </span>
+                </li>
+              ))}
+              {creditOrders.length === 0 ? (
+                <li className="text-xs text-muted-foreground">No credit issued on this day.</li>
+              ) : null}
+            </ul>
+          </div>
+
         </section>
       </div>
     </AppShell>
