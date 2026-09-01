@@ -41,7 +41,19 @@ export const Route = createFileRoute("/inventory")({
 type Filter = "All" | "Low" | "Out";
 
 function InventoryPage() {
-  const { products, updateProduct, restock } = usePos();
+  const { products, updateProduct, restock, addProduct, deleteProduct, currentUser } = usePos();
+  const canManage = currentUser?.role !== "rep";
+  const [addOpen, setAddOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "",
+    category: "Packets",
+    sku: "",
+    price: String(SETTINGS.sellingPrice),
+    cost: String(SETTINGS.sellingPrice - SETTINGS.profitPerPacket),
+    stock: "0",
+    packets: "1",
+  });
+
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("All");
 
