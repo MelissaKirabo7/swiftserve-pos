@@ -192,6 +192,19 @@ function InventoryPage() {
                         <PackagePlus className="size-3.5" />+{amount}
                       </Button>
                     ))}
+                    {canManage ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Delete ${p.name}`}
+                        onClick={() => {
+                          deleteProduct(p.id);
+                          toast.success(`${p.name} removed from inventory`);
+                        }}
+                      >
+                        <Trash2 className="size-4 text-destructive" />
+                      </Button>
+                    ) : null}
                   </div>
                 </li>
               );
@@ -204,6 +217,58 @@ function InventoryPage() {
           </ul>
         </div>
       </div>
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-display">New inventory item</DialogTitle>
+            <DialogDescription>Add a product so it appears on the register.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {(
+              [
+                ["name", "Name"],
+                ["category", "Category"],
+                ["sku", "SKU"],
+                ["price", "Selling price"],
+                ["cost", "Cost"],
+                ["stock", "Opening stock"],
+                ["packets", "Packets per unit"],
+              ] as [keyof typeof draft, string][]
+            ).map(([key, label]) => (
+              <div key={key} className="space-y-1.5">
+                <Label htmlFor={`new-${key}`}>{label}</Label>
+                <Input
+                  id={`new-${key}`}
+                  value={draft[key]}
+                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
+            <Button
+              className="w-full"
+              disabled={!draft.name.trim()}
+              onClick={() => {
+                addProduct({
+                  name: draft.name.trim(),
+                  category: draft.category.trim() || "Packets",
+                  sku: draft.sku.trim() || draft.name.trim().slice(0, 8).toUpperCase(),
+                  price: Number(draft.price) || 0,
+                  cost: Number(draft.cost) || 0,
+                  stock: Math.max(0, Number(draft.stock) || 0),
+                  packets: Math.max(1, Number(draft.packets) || 1),
+                });
+                toast.success(`${draft.name.trim()} added`);
+                setDraft((d) => ({ ...d, name: "", sku: "", stock: "0" }));
+                setAddOpen(false);
+              }}
+            >
+              Add item
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AppShell>
+
   );
 }
