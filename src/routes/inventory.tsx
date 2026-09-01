@@ -81,12 +81,20 @@ function InventoryPage() {
       title="Inventory"
       subtitle={`${products.length} products · stock value ${formatMoney(stockValue)}`}
       actions={
-        lowCount ? (
-          <Badge className="gap-1 bg-warning text-warning-foreground">
-            <AlertTriangle className="size-3.5" /> {lowCount} low
-          </Badge>
-        ) : null
+        <div className="flex items-center gap-2">
+          {lowCount ? (
+            <Badge className="gap-1 bg-warning text-warning-foreground">
+              <AlertTriangle className="size-3.5" /> {lowCount} low
+            </Badge>
+          ) : null}
+          {canManage ? (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" /> New item
+            </Button>
+          ) : null}
+        </div>
       }
+
     >
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
