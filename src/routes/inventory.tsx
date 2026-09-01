@@ -1,14 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { AlertTriangle, PackagePlus, Search } from "lucide-react";
+import { AlertTriangle, PackagePlus, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SETTINGS, formatMoney } from "@/data/catalog";
 import { usePos } from "@/lib/pos-store";
 import { cn } from "@/lib/utils";
+
 
 export const Route = createFileRoute("/inventory")({
   head: () => ({
@@ -32,7 +41,19 @@ export const Route = createFileRoute("/inventory")({
 type Filter = "All" | "Low" | "Out";
 
 function InventoryPage() {
-  const { products, updateProduct, restock } = usePos();
+  const { products, updateProduct, restock, addProduct, deleteProduct, currentUser } = usePos();
+  const canManage = currentUser?.role !== "rep";
+  const [addOpen, setAddOpen] = useState(false);
+  const [draft, setDraft] = useState({
+    name: "",
+    category: "Packets",
+    sku: "",
+    price: String(SETTINGS.sellingPrice),
+    cost: String(SETTINGS.sellingPrice - SETTINGS.profitPerPacket),
+    stock: "0",
+    packets: "1",
+  });
+
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("All");
 
@@ -60,12 +81,20 @@ function InventoryPage() {
       title="Inventory"
       subtitle={`${products.length} products · stock value ${formatMoney(stockValue)}`}
       actions={
-        lowCount ? (
-          <Badge className="gap-1 bg-warning text-warning-foreground">
-            <AlertTriangle className="size-3.5" /> {lowCount} low
-          </Badge>
-        ) : null
+        <div className="flex items-center gap-2">
+          {lowCount ? (
+            <Badge className="gap-1 bg-warning text-warning-foreground">
+              <AlertTriangle className="size-3.5" /> {lowCount} low
+            </Badge>
+          ) : null}
+          {canManage ? (
+            <Button size="sm" onClick={() => setAddOpen(true)}>
+              <Plus className="size-4" /> New item
+            </Button>
+          ) : null}
+        </div>
       }
+
     >
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -163,6 +192,19 @@ function InventoryPage() {
                         <PackagePlus className="size-3.5" />+{amount}
                       </Button>
                     ))}
+                    {canManage ? (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label={`Delete ${p.name}`}
+                        onClick={() => {
+                          deleteProduct(p.id);
+                          toast.success(`${p.name} removed from inventory`);
+                        }}
+                      >
+                        <Trash2 className="size-4 text-destructive" />
+                      </Button>
+                    ) : null}
                   </div>
                 </li>
               );
@@ -175,6 +217,58 @@ function InventoryPage() {
           </ul>
         </div>
       </div>
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-display">New inventory item</DialogTitle>
+            <DialogDescription>Add a product so it appears on the register.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3">
+            {(
+              [
+                ["name", "Name"],
+                ["category", "Category"],
+                ["sku", "SKU"],
+                ["price", "Selling price"],
+                ["cost", "Cost"],
+                ["stock", "Opening stock"],
+                ["packets", "Packets per unit"],
+              ] as [keyof typeof draft, string][]
+            ).map(([key, label]) => (
+              <div key={key} className="space-y-1.5">
+                <Label htmlFor={`new-${key}`}>{label}</Label>
+                <Input
+                  id={`new-${key}`}
+                  value={draft[key]}
+                  onChange={(e) => setDraft((d) => ({ ...d, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
+            <Button
+              className="w-full"
+              disabled={!draft.name.trim()}
+              onClick={() => {
+                addProduct({
+                  name: draft.name.trim(),
+                  category: draft.category.trim() || "Packets",
+                  sku: draft.sku.trim() || draft.name.trim().slice(0, 8).toUpperCase(),
+                  price: Number(draft.price) || 0,
+                  cost: Number(draft.cost) || 0,
+                  stock: Math.max(0, Number(draft.stock) || 0),
+                  packets: Math.max(1, Number(draft.packets) || 1),
+                });
+                toast.success(`${draft.name.trim()} added`);
+                setDraft((d) => ({ ...d, name: "", sku: "", stock: "0" }));
+                setAddOpen(false);
+              }}
+            >
+              Add item
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </AppShell>
+
   );
 }
