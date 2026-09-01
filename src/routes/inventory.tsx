@@ -1,14 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { AlertTriangle, PackagePlus, Search } from "lucide-react";
+import { AlertTriangle, PackagePlus, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { SETTINGS, formatMoney } from "@/data/catalog";
 import { usePos } from "@/lib/pos-store";
 import { cn } from "@/lib/utils";
+
 
 export const Route = createFileRoute("/inventory")({
   head: () => ({
