@@ -167,8 +167,18 @@ export function AppShell({
   const [open, setOpen] = useState(false);
   const { currentUser, ready } = usePos();
 
-  if (!ready) return <div className="min-h-screen bg-background" />;
+  if (!ready) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-sidebar p-6">
+        <div className="flex flex-col items-center gap-3 text-sidebar-foreground/80">
+          <span className="size-8 animate-spin rounded-full border-2 border-sidebar-foreground/25 border-t-sidebar-primary" />
+          <p className="text-sm">Loading register…</p>
+        </div>
+      </div>
+    );
+  }
   if (!currentUser) return <SignInScreen />;
+
 
   const permitted = !allow || allow.includes(currentUser.role);
 
