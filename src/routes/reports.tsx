@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/data/catalog";
 import { usePos } from "@/lib/pos-store";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/reports")({
   head: () => ({
@@ -110,7 +111,7 @@ function ReportsPage() {
   return (
     <AppShell
       title="Reports"
-      subtitle={`All-time revenue ${formatMoney(sum(live, (o) => o.total))} · ${live.length} sales`}
+      subtitle={`${repOnly ? "Your" : "All-time"} revenue ${formatMoney(sum(live, (o) => o.total))} · ${live.length} sales`}
       actions={
         <div className="flex items-end gap-2">
           <div className="hidden sm:block">
