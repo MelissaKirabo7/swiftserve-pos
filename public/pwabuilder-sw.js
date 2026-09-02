@@ -1,54 +1,30 @@
-// This is the service worker with the combined offline experience (Offline page + Offline copy of pages)
+// Replacement worker at the old PWABuilder service worker path.
+// The previous worker cached every navigation with StaleWhileRevalidate and
+// fell back to a page that never existed, which served blank/stale HTML.
+// This version evicts its own caches and unregisters itself.
 
-const CACHE = "pwabuilder-offline-page";
-
-importScripts('https://storage.googleapis.com/workbox-cdn/releases/5.1.2/workbox-sw.js');
-
-// TODO: replace the following with the correct offline fallback page i.e.: const offlineFallbackPage = "offline.html";
-const offlineFallbackPage = "ToDo-replace-this-name.html";
-
-self.addEventListener("message", (event) => {
-  if (event.data && event.data.type === "SKIP_WAITING") {
-    self.skipWaiting();
-  }
-});
-
-self.addEventListener('install', async (event) => {
-  event.waitUntil(
-    caches.open(CACHE)
-      .then((cache) => cache.add(offlineFallbackPage))
+function isOldAppCache(name) {
+  return (
+    name === "pwabuilder-offline-page" ||
+    /(^|-)precache-v\d+-|(^|-)runtime-|(^|-)googleAnalytics-/.test(name)
   );
-});
-
-if (workbox.navigationPreload.isSupported()) {
-  workbox.navigationPreload.enable();
 }
 
-workbox.routing.registerRoute(
-  new RegExp('/*'),
-  new workbox.strategies.StaleWhileRevalidate({
-    cacheName: CACHE
-  })
-);
+self.addEventListener("install", () => self.skipWaiting());
 
-self.addEventListener('fetch', (event) => {
-  if (event.request.mode === 'navigate') {
-    event.respondWith((async () => {
+self.addEventListener("activate", (event) =>
+  event.waitUntil(
+    (async () => {
       try {
-        const preloadResp = await event.preloadResponse;
-
-        if (preloadResp) {
-          return preloadResp;
-        }
-
-        const networkResp = await fetch(event.request);
-        return networkResp;
-      } catch (error) {
-
-        const cache = await caches.open(CACHE);
-        const cachedResp = await cache.match(offlineFallbackPage);
-        return cachedResp;
+        const cacheNames = await caches.keys();
+        const stale = cacheNames.filter(isOldAppCache);
+        await Promise.allSettled(stale.map((name) => caches.delete(name)));
+        await self.clients.claim();
+        const windowClients = await self.clients.matchAll({ type: "window" });
+        await Promise.allSettled(windowClients.map((client) => client.navigate(client.url)));
+      } finally {
+        await self.registration.unregister();
       }
-    })());
-  }
-});
+    })(),
+  ),
+);
