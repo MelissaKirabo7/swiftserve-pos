@@ -107,6 +107,8 @@ function RegisterPage() {
       title="Register"
       subtitle={`${seller} · today's sales ${formatMoney(todayTotal)}`}
       padded={false}
+      allow={["owner", "rep"]}
+
       actions={
         <div className="hidden rounded-xl bg-primary px-3 py-1.5 text-right text-primary-foreground sm:block">
           <p className="text-[10px] uppercase tracking-wide opacity-70">Today</p>

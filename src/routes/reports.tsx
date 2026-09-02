@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/data/catalog";
 import { usePos } from "@/lib/pos-store";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/reports")({
   head: () => ({
@@ -110,7 +111,7 @@ function ReportsPage() {
   return (
     <AppShell
       title="Reports"
-      subtitle={`All-time revenue ${formatMoney(sum(live, (o) => o.total))} · ${live.length} sales`}
+      subtitle={`${repOnly ? "Your" : "All-time"} revenue ${formatMoney(sum(live, (o) => o.total))} · ${live.length} sales`}
       actions={
         <div className="flex items-end gap-2">
           <div className="hidden sm:block">
@@ -157,13 +158,18 @@ function ReportsPage() {
           />
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className={cn("grid gap-4", repOnly ? "xl:grid-cols-1" : "xl:grid-cols-3")}>
           <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
-            <h2 className="font-display text-sm font-semibold">Top sellers today</h2>
-            <ul className="mt-3 space-y-2">
-              {topProducts.map((p) => (
+            <h2 className="font-display text-sm font-semibold">
+              Best-selling products · {day}
+            </h2>
+            <ol className="mt-3 space-y-2">
+              {topProducts.map((p, i) => (
                 <li key={p.name} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="min-w-0 truncate">{p.name}</span>
+                  <span className="min-w-0 truncate">
+                    <span className="mr-1.5 numeric text-muted-foreground">{i + 1}.</span>
+                    {p.name}
+                  </span>
                   <span className="numeric shrink-0 text-muted-foreground">
                     {p.qty} · {formatMoney(p.value)}
                   </span>
@@ -172,45 +178,52 @@ function ReportsPage() {
               {topProducts.length === 0 ? (
                 <li className="text-xs text-muted-foreground">No sales recorded for this day.</li>
               ) : null}
-            </ul>
+            </ol>
           </section>
 
-          <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
-            <h2 className="font-display text-sm font-semibold">Top customers (all time)</h2>
-            <ul className="mt-3 space-y-2">
-              {topCustomers.map((c) => (
-                <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="min-w-0 truncate">{c.name}</span>
-                  <span className="numeric shrink-0 text-muted-foreground">
-                    {formatMoney(c.totalPaid)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
-            <h2 className="font-display text-sm font-semibold">Seller performance</h2>
-            <ul className="mt-3 space-y-2">
-              {sellerRows.map(([name, row]) => (
-                <li key={name} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="min-w-0 truncate">
-                    {name}
-                    <span className="ml-1 text-[11px] text-muted-foreground numeric">
-                      {row.orders} sales
+          {repOnly ? null : (
+            <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
+              <h2 className="font-display text-sm font-semibold">Top customers (all time)</h2>
+              <ul className="mt-3 space-y-2">
+                {topCustomers.map((c) => (
+                  <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate">{c.name}</span>
+                    <span className="numeric shrink-0 text-muted-foreground">
+                      {formatMoney(c.totalPaid)}
                     </span>
-                  </span>
-                  <span className="numeric shrink-0 text-muted-foreground">
-                    {formatMoney(row.total)}
-                  </span>
-                </li>
-              ))}
-              {sellerRows.length === 0 ? (
-                <li className="text-xs text-muted-foreground">Nothing sold on this day.</li>
-              ) : null}
-            </ul>
-          </section>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {repOnly ? null : (
+            <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
+              <h2 className="font-display text-sm font-semibold">
+                Sales rep leaderboard · {day}
+              </h2>
+              <ul className="mt-3 space-y-2">
+                {sellerRows.map(([name, row]) => (
+                  <li key={name} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate">
+                      {name}
+                      <span className="ml-1 text-[11px] text-muted-foreground numeric">
+                        {row.orders} sales · {formatMoney(row.profit)} profit
+                      </span>
+                    </span>
+                    <span className="numeric shrink-0 text-muted-foreground">
+                      {formatMoney(row.total)}
+                    </span>
+                  </li>
+                ))}
+                {sellerRows.length === 0 ? (
+                  <li className="text-xs text-muted-foreground">Nothing sold on this day.</li>
+                ) : null}
+              </ul>
+            </section>
+          )}
         </div>
+
 
         <section
           id="receipt-print"
