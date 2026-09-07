@@ -213,6 +213,7 @@ export type CheckoutInput = {
   items: CartLine[];
   customer: string;
   seller: string;
+  sellerId?: string | undefined;
   date: string;
   method: PaymentMethod;
   amountPaid: number;
@@ -387,6 +388,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
       status,
       customer: input.customer,
       seller: input.seller,
+      sellerId: input.sellerId,
       note: input.note,
     };
 
