@@ -41,7 +41,8 @@ export const Route = createFileRoute("/inventory")({
 type Filter = "All" | "Low" | "Out";
 
 function InventoryPage() {
-  const { products, updateProduct, restock, addProduct, deleteProduct, currentUser } = usePos();
+  const { products, updateProduct, restock, addProduct, deleteProduct, currentUser, repAvailable } =
+    usePos();
   const canManage = currentUser?.role !== "rep";
   const [addOpen, setAddOpen] = useState(false);
   const [draft, setDraft] = useState({
@@ -79,7 +80,11 @@ function InventoryPage() {
   return (
     <AppShell
       title="Inventory"
-      subtitle={`${products.length} products · stock value ${formatMoney(stockValue)}`}
+      subtitle={
+        canManage
+          ? `${products.length} products · stock value ${formatMoney(stockValue)}`
+          : `${products.length} products · view only (prices and stock are managed by the owner)`
+      }
       actions={
         <div className="flex items-center gap-2">
           {lowCount ? (
@@ -145,26 +150,41 @@ function InventoryPage() {
                       {p.sku} · {p.category} · {p.packets} pkt
                     </p>
                   </div>
-                  <Input
-                    aria-label={`Cost for ${p.name}`}
-                    className="h-9 numeric"
-                    value={p.cost}
-                    onChange={(e) => updateProduct(p.id, { cost: Number(e.target.value) || 0 })}
-                  />
-                  <Input
-                    aria-label={`Price for ${p.name}`}
-                    className="h-9 numeric"
-                    value={p.price}
-                    onChange={(e) => updateProduct(p.id, { price: Number(e.target.value) || 0 })}
-                  />
-                  <Input
-                    aria-label={`Stock for ${p.name}`}
-                    className="h-9 numeric"
-                    value={p.stock}
-                    onChange={(e) =>
-                      updateProduct(p.id, { stock: Math.max(0, Number(e.target.value) || 0) })
-                    }
-                  />
+                  {canManage ? (
+                    <>
+                      <Input
+                        aria-label={`Cost for ${p.name}`}
+                        className="h-9 numeric"
+                        value={p.cost}
+                        onChange={(e) => updateProduct(p.id, { cost: Number(e.target.value) || 0 })}
+                      />
+                      <Input
+                        aria-label={`Price for ${p.name}`}
+                        className="h-9 numeric"
+                        value={p.price}
+                        onChange={(e) => updateProduct(p.id, { price: Number(e.target.value) || 0 })}
+                      />
+                      <Input
+                        aria-label={`Stock for ${p.name}`}
+                        className="h-9 numeric"
+                        value={p.stock}
+                        onChange={(e) =>
+                          updateProduct(p.id, { stock: Math.max(0, Number(e.target.value) || 0) })
+                        }
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <span className="numeric text-sm text-muted-foreground">—</span>
+                      <span className="numeric text-sm">{formatMoney(p.price)}</span>
+                      <span className="numeric text-sm">
+                        {p.stock}
+                        <span className="ml-1 text-[11px] text-muted-foreground">
+                          (yours {repAvailable(currentUser?.name ?? "", p.id)})
+                        </span>
+                      </span>
+                    </>
+                  )}
                   <span
                     className={cn(
                       "w-fit rounded-lg px-2 py-1 text-[11px] font-semibold",
@@ -178,7 +198,7 @@ function InventoryPage() {
                     {p.stock === 0 ? "Out of stock" : low ? "Low stock" : "In stock"}
                   </span>
                   <div className="flex justify-end gap-1.5">
-                    {[10, 50].map((amount) => (
+                    {(canManage ? [10, 50] : []).map((amount) => (
                       <Button
                         key={amount}
                         size="sm"
@@ -192,6 +212,9 @@ function InventoryPage() {
                         <PackagePlus className="size-3.5" />+{amount}
                       </Button>
                     ))}
+                    {!canManage ? (
+                      <span className="text-[11px] text-muted-foreground">Read-only</span>
+                    ) : null}
                     {canManage ? (
                       <Button
                         size="icon"
