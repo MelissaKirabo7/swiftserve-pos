@@ -727,6 +727,45 @@ export function PosProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
   }, []);
 
+  // Automated daily snapshots: summaries survive even if raw transactions are purged.
+  useEffect(() => {
+    if (!ready) return;
+    setState((prev) => {
+      const cutoff = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      const days = [
+        ...new Set(
+          prev.orders
+            .filter((o) => o.date >= cutoff && o.status !== "Voided" && o.status !== "Refunded")
+            .map((o) => o.date),
+        ),
+      ];
+      const missing = days.filter(
+        (d) => !prev.archives.some((a) => a.label === "Daily" && a.start === d && a.end === d),
+      );
+      if (missing.length === 0) return prev;
+      const snaps: ReportSnapshot[] = missing.map((d) => {
+        const list = prev.orders.filter(
+          (o) => o.date === d && o.status !== "Voided" && o.status !== "Refunded",
+        );
+        return {
+          id: uid("snap"),
+          label: "Daily",
+          start: d,
+          end: d,
+          createdAt: new Date().toISOString(),
+          revenue: list.reduce((t, o) => t + o.total, 0),
+          collected: list.reduce((t, o) => t + o.amountPaid, 0),
+          credit: list.reduce((t, o) => t + o.balance, 0),
+          profit: list.reduce((t, o) => t + o.profit, 0),
+          tips: list.reduce((t, o) => t + (o.tip ?? 0), 0),
+          packets: list.reduce((t, o) => t + o.packets, 0),
+          orders: list.length,
+        };
+      });
+      return { ...prev, archives: [...snaps, ...prev.archives].slice(0, 400) };
+    });
+  }, [ready]);
+
   const repAvailable = useCallback<StoreValue["repAvailable"]>(
     (rep, productId) =>
       state.allocations

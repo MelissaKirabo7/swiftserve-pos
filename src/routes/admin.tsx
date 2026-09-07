@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Merge, Trash2, UserPlus } from "lucide-react";
+import { Merge, PackageCheck, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,11 @@ function AdminPage() {
     mergeCustomers,
     deleteCustomer,
     purgeTransactions,
+    products,
+    allocations,
+    archives,
+    delegateStock,
+    returnStock,
   } = usePos();
 
   const isSuper = currentUser?.role === "superadmin";
@@ -50,6 +55,10 @@ function AdminPage() {
   const [role, setRole] = useState<Role>("rep");
   const [passcode, setPasscode2] = useState("");
   const [confirmPurge, setConfirmPurge] = useState("");
+  const reps = users.filter((u) => u.role === "rep");
+  const [delRep, setDelRep] = useState(reps[0]?.name ?? "");
+  const [delProduct, setDelProduct] = useState("");
+  const [delQty, setDelQty] = useState("10");
 
   const duplicates = useMemo(() => findDuplicateGroups(customers), [customers]);
 
@@ -260,6 +269,139 @@ function AdminPage() {
             </p>
           )}
         </section>
+
+        <section className="rounded-2xl border border-border bg-card p-4 shadow-tile xl:col-span-2">
+          <h2 className="font-display text-sm font-semibold">Stock delegation to sales reps</h2>
+          <p className="text-[11px] text-muted-foreground">
+            Assigned units leave the general store and are deducted from the rep&apos;s own pool as
+            they sell.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_1fr_auto_auto]">
+            <div className="space-y-1.5">
+              <Label htmlFor="del-rep">Sales rep</Label>
+              <select
+                id="del-rep"
+                value={delRep}
+                onChange={(e) => setDelRep(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {reps.map((r) => (
+                  <option key={r.id} value={r.name}>
+                    {r.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="del-product">Product</Label>
+              <select
+                id="del-product"
+                value={delProduct}
+                onChange={(e) => setDelProduct(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Choose product…</option>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.stock} in store)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="del-qty">Units</Label>
+              <Input
+                id="del-qty"
+                className="h-9 w-24 numeric"
+                value={delQty}
+                onChange={(e) => setDelQty(e.target.value)}
+              />
+            </div>
+            <Button
+              className="self-end"
+              disabled={!delRep || !delProduct || !(Number(delQty) > 0)}
+              onClick={() => {
+                delegateStock(delRep, delProduct, Number(delQty));
+                toast.success(`${delQty} units assigned to ${delRep}`);
+              }}
+            >
+              <PackageCheck className="size-4" /> Assign stock
+            </Button>
+          </div>
+
+          <ul className="mt-4 space-y-2">
+            {allocations.map((a) => {
+              const product = products.find((p) => p.id === a.productId);
+              const remaining = a.assigned - a.sold;
+              return (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-center gap-2 rounded-xl bg-secondary px-3 py-2 text-sm"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium">
+                      {a.rep} · {product?.name ?? "Removed product"}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground numeric">
+                      assigned {a.assigned} · sold {a.sold} · remaining {remaining} ·{" "}
+                      {a.assignedAt.slice(0, 10)} by {a.assignedBy}
+                    </span>
+                  </span>
+                  <span className="numeric font-display text-base font-bold">{remaining}</span>
+                  {remaining > 0 ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        returnStock(a.id, remaining);
+                        toast.success(`${remaining} units returned to the store`);
+                      }}
+                    >
+                      Return
+                    </Button>
+                  ) : null}
+                </li>
+              );
+            })}
+            {allocations.length === 0 ? (
+              <li className="text-xs text-muted-foreground">No stock delegated yet.</li>
+            ) : null}
+          </ul>
+        </section>
+
+        {isSuper ? (
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-tile xl:col-span-2">
+            <h2 className="font-display text-sm font-semibold">
+              Archived report snapshots ({archives.length})
+            </h2>
+            <p className="text-[11px] text-muted-foreground">
+              Automatically captured summaries. These survive a transaction purge.
+            </p>
+            <ul className="mt-3 max-h-72 space-y-1.5 overflow-y-auto">
+              {archives.slice(0, 60).map((a) => (
+                <li
+                  key={a.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-secondary px-3 py-2 text-sm"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">
+                      {a.label} · {a.start}
+                      {a.end === a.start ? "" : ` → ${a.end}`}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground numeric">
+                      {a.orders} sales · {a.packets} packets · tips {formatMoney(a.tips)} · profit{" "}
+                      {formatMoney(a.profit)}
+                    </span>
+                  </span>
+                  <span className="numeric font-display font-bold">{formatMoney(a.revenue)}</span>
+                </li>
+              ))}
+              {archives.length === 0 ? (
+                <li className="text-xs text-muted-foreground">No snapshots stored yet.</li>
+              ) : null}
+            </ul>
+          </section>
+        ) : null}
       </div>
     </AppShell>
   );
