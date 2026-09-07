@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -38,9 +39,11 @@ export type Order = {
   splitOther?: number | undefined;
   amountPaid: number;
   balance: number;
+  tip: number;
   status: OrderStatus;
   customer: string;
   seller: string;
+  sellerId?: string | undefined;
   note?: string | undefined;
 };
 
@@ -61,6 +64,31 @@ export type Settlement = {
   amount: number;
   method: PaymentMethod;
   note?: string;
+};
+
+export type StockAllocation = {
+  id: string;
+  rep: string;
+  productId: string;
+  assigned: number;
+  sold: number;
+  assignedAt: string;
+  assignedBy: string;
+};
+
+export type ReportSnapshot = {
+  id: string;
+  label: string;
+  start: string;
+  end: string;
+  createdAt: string;
+  revenue: number;
+  collected: number;
+  credit: number;
+  profit: number;
+  tips: number;
+  packets: number;
+  orders: number;
 };
 
 export type Role = "superadmin" | "owner" | "rep";
@@ -90,6 +118,8 @@ type State = {
   customers: Customer[];
   settlements: Settlement[];
   users: User[];
+  allocations: StockAllocation[];
+  archives: ReportSnapshot[];
 };
 
 
@@ -159,6 +189,7 @@ function buildSeed(): State {
       method,
       amountPaid: sale.paid,
       balance: sale.balance,
+      tip: 0,
       status:
         sale.status === "Paid" ? "Paid" : sale.status === "Partial" ? "Partial" : "Unpaid",
       customer: name,
@@ -172,6 +203,8 @@ function buildSeed(): State {
     customers: [...customers.values()].sort((a, b) => a.name.localeCompare(b.name)),
     settlements: [],
     users: SEED_USERS.map((u) => ({ ...u })),
+    allocations: [],
+    archives: [],
   };
 
 }
@@ -180,9 +213,11 @@ export type CheckoutInput = {
   items: CartLine[];
   customer: string;
   seller: string;
+  sellerId?: string | undefined;
   date: string;
   method: PaymentMethod;
   amountPaid: number;
+  tip?: number | undefined;
   splitCash?: number | undefined;
   splitOther?: number | undefined;
   note?: string | undefined;
@@ -210,6 +245,10 @@ type StoreValue = State & {
   deleteCustomer: (id: string) => void;
   mergeCustomers: (targetId: string, sourceIds: string[]) => void;
   purgeTransactions: () => void;
+  delegateStock: (rep: string, productId: string, qty: number) => void;
+  returnStock: (allocationId: string, qty: number) => void;
+  repAvailable: (rep: string, productId: string) => number;
+  saveSnapshot: (snap: Omit<ReportSnapshot, "id" | "createdAt">) => void;
   resetData: () => void;
 };
 
@@ -273,6 +312,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(() => buildSeed());
   const [seller, setSeller] = useState<string>("Aquila");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
+  currentUserIdRef.current = currentUserId;
   const [ready, setReady] = useState(false);
 
 
@@ -288,6 +329,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
             customers: parsed.customers ?? [],
             settlements: parsed.settlements ?? [],
             users: parsed.users?.length ? parsed.users : SEED_USERS.map((u) => ({ ...u })),
+            allocations: parsed.allocations ?? [],
+            archives: parsed.archives ?? [],
           });
         }
         if (parsed.seller) setSeller(parsed.seller);
@@ -320,6 +363,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
       const unitProfit = product ? product.price - product.cost : SETTINGS.profitPerPacket;
       return sum + unitProfit * l.qty - l.discount;
     }, 0);
+    const tip = Math.max(0, Math.round(input.tip ?? 0));
     const amountPaid = Math.min(input.amountPaid, total);
     const balance = Math.max(0, total - amountPaid);
     const status: OrderStatus = balance === 0 ? "Paid" : amountPaid > 0 ? "Partial" : "Unpaid";
@@ -340,16 +384,37 @@ export function PosProvider({ children }: { children: ReactNode }) {
       splitOther: input.splitOther,
       amountPaid,
       balance,
+      tip,
       status,
       customer: input.customer,
       seller: input.seller,
+      sellerId: input.sellerId,
       note: input.note,
     };
 
     setState((prev) => {
+      const repAllocs = prev.allocations.filter(
+        (a) => slug(a.rep) === slug(input.seller) && a.assigned - a.sold > 0,
+      );
+      const fromAllocation = new Map<string, number>();
+      const allocations = prev.allocations.map((a) => {
+        if (slug(a.rep) !== slug(input.seller)) return a;
+        const line = input.items.find((l) => l.productId === a.productId);
+        if (!line) return a;
+        const already = fromAllocation.get(a.productId) ?? 0;
+        const take = Math.min(a.assigned - a.sold, line.qty - already);
+        if (take <= 0) return a;
+        fromAllocation.set(a.productId, already + take);
+        return { ...a, sold: a.sold + take };
+      });
+      void repAllocs;
+
       const products = prev.products.map((p) => {
         const line = input.items.find((l) => l.productId === p.id);
-        return line ? { ...p, stock: Math.max(0, p.stock - line.qty) } : p;
+        if (!line) return p;
+        const covered = fromAllocation.get(p.id) ?? 0;
+        const remainder = Math.max(0, line.qty - covered);
+        return { ...p, stock: Math.max(0, p.stock - remainder) };
       });
 
       const key = slug(input.customer);
@@ -380,7 +445,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
         ].sort((a, b) => a.name.localeCompare(b.name));
       }
 
-      return { ...prev, products, customers, orders: [order, ...prev.orders] };
+      return { ...prev, products, allocations, customers, orders: [order, ...prev.orders] };
     });
 
     return order;
@@ -552,6 +617,65 @@ export function PosProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
+  const delegateStock = useCallback<StoreValue["delegateStock"]>((rep, productId, qty) => {
+    setState((prev) => {
+      const product = prev.products.find((p) => p.id === productId);
+      const amount = Math.min(Math.max(0, Math.round(qty)), product?.stock ?? 0);
+      if (!product || amount <= 0) return prev;
+      const allocation: StockAllocation = {
+        id: uid("a"),
+        rep,
+        productId,
+        assigned: amount,
+        sold: 0,
+        assignedAt: new Date().toISOString(),
+        assignedBy: prev.users.find((u) => u.id === currentUserIdRef.current)?.name ?? "Owner",
+      };
+      return {
+        ...prev,
+        products: prev.products.map((p) =>
+          p.id === productId ? { ...p, stock: p.stock - amount } : p,
+        ),
+        allocations: [allocation, ...prev.allocations],
+      };
+    });
+  }, []);
+
+  const returnStock = useCallback<StoreValue["returnStock"]>((allocationId, qty) => {
+    setState((prev) => {
+      const alloc = prev.allocations.find((a) => a.id === allocationId);
+      if (!alloc) return prev;
+      const amount = Math.min(Math.max(0, Math.round(qty)), alloc.assigned - alloc.sold);
+      if (amount <= 0) return prev;
+      return {
+        ...prev,
+        products: prev.products.map((p) =>
+          p.id === alloc.productId ? { ...p, stock: p.stock + amount } : p,
+        ),
+        allocations: prev.allocations
+          .map((a) => (a.id === allocationId ? { ...a, assigned: a.assigned - amount } : a))
+          .filter((a) => a.assigned > 0),
+      };
+    });
+  }, []);
+
+  const saveSnapshot = useCallback<StoreValue["saveSnapshot"]>((snap) => {
+    setState((prev) => {
+      const existing = prev.archives.find(
+        (a) => a.start === snap.start && a.end === snap.end && a.label === snap.label,
+      );
+      const record: ReportSnapshot = {
+        ...snap,
+        id: existing?.id ?? uid("snap"),
+        createdAt: new Date().toISOString(),
+      };
+      return {
+        ...prev,
+        archives: [record, ...prev.archives.filter((a) => a.id !== record.id)].slice(0, 400),
+      };
+    });
+  }, []);
+
   const signIn = useCallback(
     (name: string, passcode: string) => {
       const user = state.users.find(
@@ -603,6 +727,53 @@ export function PosProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
   }, []);
 
+  // Automated daily snapshots: summaries survive even if raw transactions are purged.
+  useEffect(() => {
+    if (!ready) return;
+    setState((prev) => {
+      const cutoff = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+      const days = [
+        ...new Set(
+          prev.orders
+            .filter((o) => o.date >= cutoff && o.status !== "Voided" && o.status !== "Refunded")
+            .map((o) => o.date),
+        ),
+      ];
+      const missing = days.filter(
+        (d) => !prev.archives.some((a) => a.label === "Daily" && a.start === d && a.end === d),
+      );
+      if (missing.length === 0) return prev;
+      const snaps: ReportSnapshot[] = missing.map((d) => {
+        const list = prev.orders.filter(
+          (o) => o.date === d && o.status !== "Voided" && o.status !== "Refunded",
+        );
+        return {
+          id: uid("snap"),
+          label: "Daily",
+          start: d,
+          end: d,
+          createdAt: new Date().toISOString(),
+          revenue: list.reduce((t, o) => t + o.total, 0),
+          collected: list.reduce((t, o) => t + o.amountPaid, 0),
+          credit: list.reduce((t, o) => t + o.balance, 0),
+          profit: list.reduce((t, o) => t + o.profit, 0),
+          tips: list.reduce((t, o) => t + (o.tip ?? 0), 0),
+          packets: list.reduce((t, o) => t + o.packets, 0),
+          orders: list.length,
+        };
+      });
+      return { ...prev, archives: [...snaps, ...prev.archives].slice(0, 400) };
+    });
+  }, [ready]);
+
+  const repAvailable = useCallback<StoreValue["repAvailable"]>(
+    (rep, productId) =>
+      state.allocations
+        .filter((a) => slug(a.rep) === slug(rep) && a.productId === productId)
+        .reduce((total, a) => total + (a.assigned - a.sold), 0),
+    [state.allocations],
+  );
+
   const resetData = useCallback(() => setState(buildSeed()), []);
 
   const currentUser = useMemo(
@@ -634,6 +805,10 @@ export function PosProvider({ children }: { children: ReactNode }) {
       deleteCustomer,
       mergeCustomers,
       purgeTransactions,
+      delegateStock,
+      returnStock,
+      repAvailable,
+      saveSnapshot,
       resetData,
     }),
     [
@@ -658,6 +833,10 @@ export function PosProvider({ children }: { children: ReactNode }) {
       deleteCustomer,
       mergeCustomers,
       purgeTransactions,
+      delegateStock,
+      returnStock,
+      repAvailable,
+      saveSnapshot,
       resetData,
     ],
   );

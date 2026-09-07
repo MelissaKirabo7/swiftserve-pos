@@ -26,6 +26,7 @@ const METHODS: { id: PaymentMethod; label: string; icon: typeof Banknote }[] = [
 export type PaymentResult = {
   method: PaymentMethod;
   amountPaid: number;
+  tip: number;
   splitCash?: number | undefined;
   splitOther?: number | undefined;
   customer: string;
@@ -53,6 +54,7 @@ export function PaymentModal({
   const [tendered, setTendered] = useState("");
   const [splitCash, setSplitCash] = useState("");
   const [note, setNote] = useState("");
+  const [keepChange, setKeepChange] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -60,6 +62,7 @@ export function PaymentModal({
       setTendered(String(total));
       setSplitCash("");
       setNote("");
+      setKeepChange(false);
     }
   }, [open, total]);
 
@@ -76,7 +79,12 @@ export function PaymentModal({
         ? Math.min(cashPart, total)
         : Math.min(Number(tendered) || 0, total);
   const balance = Math.max(0, total - amountPaid);
-  const change = method === "Cash" ? Math.max(0, (Number(tendered) || 0) - total) : 0;
+  const overpay =
+    method === "Cash" || method === "Mobile Money" || method === "Card"
+      ? Math.max(0, (Number(tendered) || 0) - total)
+      : 0;
+  const tip = keepChange ? overpay : 0;
+  const change = overpay - tip;
 
   const projectedDebt = (profile?.balance ?? 0) + balance;
   const limit = profile?.creditLimit ?? 0;
@@ -182,6 +190,19 @@ export function PaymentModal({
                 onChange={(e) => setTendered(e.target.value)}
                 className="h-12 text-lg font-semibold numeric"
               />
+              {overpay > 0 ? (
+                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-success/40 bg-success/10 px-3 py-2 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    checked={keepChange}
+                    onChange={(e) => setKeepChange(e.target.checked)}
+                    className="size-4 accent-current"
+                  />
+                  Customer leaves the{" "}
+                  <span className="numeric font-semibold">{formatMoney(overpay)}</span> change as a
+                  tip
+                </label>
+              ) : null}
               <div className="flex flex-wrap gap-1.5">
                 {suggestions.map((amount, i) => (
                   <Button
@@ -209,7 +230,7 @@ export function PaymentModal({
             />
           </div>
 
-          <dl className="grid grid-cols-3 gap-2 rounded-xl bg-secondary p-3 text-center text-xs">
+          <dl className="grid grid-cols-4 gap-2 rounded-xl bg-secondary p-3 text-center text-xs">
             <div>
               <dt className="text-muted-foreground">Paid now</dt>
               <dd className="font-display text-base font-bold numeric">
@@ -225,6 +246,12 @@ export function PaymentModal({
             <div>
               <dt className="text-muted-foreground">Change</dt>
               <dd className="font-display text-base font-bold numeric">{formatMoney(change)}</dd>
+            </div>
+            <div>
+              <dt className="text-muted-foreground">Tip</dt>
+              <dd className="font-display text-base font-bold text-success numeric">
+                {formatMoney(tip)}
+              </dd>
             </div>
           </dl>
 
@@ -244,6 +271,7 @@ export function PaymentModal({
               onConfirm({
                 method,
                 amountPaid,
+                tip,
                 splitCash: method === "Split" ? cashPart : undefined,
                 splitOther: method === "Split" ? balance : undefined,
                 customer: customer.trim(),

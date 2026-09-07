@@ -33,7 +33,7 @@ export const Route = createFileRoute("/")({
 });
 
 function RegisterPage() {
-  const { products, customers, checkout, seller, orders } = usePos();
+  const { products, customers, checkout, seller, orders, currentUser } = usePos();
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
   const [items, setItems] = useState<CartLine[]>([]);
@@ -91,10 +91,11 @@ function RegisterPage() {
   };
 
   const confirmPayment = (result: PaymentResult) => {
-    const order = checkout({ items, seller, ...result });
+    const order = checkout({ items, seller, sellerId: currentUser?.id, ...result });
     setItems([]);
     setPayOpen(false);
     setReceipt(order);
+    if (order.tip > 0) toast.success(`Tip recorded · ${formatMoney(order.tip)}`);
     toast.success(
       order.balance > 0
         ? `Sale saved · ${formatMoney(order.balance)} on credit`

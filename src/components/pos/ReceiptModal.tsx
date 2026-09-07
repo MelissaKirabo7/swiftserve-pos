@@ -80,6 +80,12 @@ export function ReceiptModal({
               <dt>Paid</dt>
               <dd className="numeric">{formatMoney(order.amountPaid)}</dd>
             </div>
+            {order.tip > 0 ? (
+              <div className="flex justify-between font-semibold text-success">
+                <dt>Tip (change kept)</dt>
+                <dd className="numeric">{formatMoney(order.tip)}</dd>
+              </div>
+            ) : null}
             {order.balance > 0 ? (
               <div className="flex justify-between font-semibold text-destructive">
                 <dt>Balance on credit</dt>
