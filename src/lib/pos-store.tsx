@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -310,6 +311,8 @@ export function PosProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(() => buildSeed());
   const [seller, setSeller] = useState<string>("Aquila");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const currentUserIdRef = useRef<string | null>(null);
+  currentUserIdRef.current = currentUserId;
   const [ready, setReady] = useState(false);
 
 
@@ -722,6 +725,14 @@ export function PosProvider({ children }: { children: ReactNode }) {
     setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
   }, []);
 
+  const repAvailable = useCallback<StoreValue["repAvailable"]>(
+    (rep, productId) =>
+      state.allocations
+        .filter((a) => slug(a.rep) === slug(rep) && a.productId === productId)
+        .reduce((total, a) => total + (a.assigned - a.sold), 0),
+    [state.allocations],
+  );
+
   const resetData = useCallback(() => setState(buildSeed()), []);
 
   const currentUser = useMemo(
@@ -753,6 +764,10 @@ export function PosProvider({ children }: { children: ReactNode }) {
       deleteCustomer,
       mergeCustomers,
       purgeTransactions,
+      delegateStock,
+      returnStock,
+      repAvailable,
+      saveSnapshot,
       resetData,
     }),
     [
