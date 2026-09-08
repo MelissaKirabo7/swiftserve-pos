@@ -354,7 +354,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
     } catch {
       /* storage full or unavailable */
     }
-  }, [state, seller, ready]);
+  }, [state, seller, currentUserId, ready]);
 
   const checkout = useCallback((input: CheckoutInput) => {
     const { subtotal, discount, total, packets } = cartTotals(input.items);
