@@ -37,7 +37,7 @@ export const Route = createFileRoute("/customers")({
 });
 
 function CustomersPage() {
-  const { customers, settlements, settleDebt, upsertCustomer } = usePos();
+  const { customers, settlements, settleDebt, upsertCustomer, orders, currentUser } = usePos();
   const [query, setQuery] = useState("");
   const [debtOnly, setDebtOnly] = useState(false);
   const [target, setTarget] = useState<Customer | null>(null);
@@ -48,23 +48,46 @@ function CustomersPage() {
   const [newPhone, setNewPhone] = useState("");
   const [newLimit, setNewLimit] = useState(String(SETTINGS.defaultCreditLimit));
 
+  const repOnly = currentUser?.role === "rep";
+
+  const myCustomerNames = useMemo(() => {
+    const set = new Set<string>();
+    orders
+      .filter((o) => o.seller === currentUser?.name)
+      .forEach((o) => set.add(o.customer.toLowerCase()));
+    return set;
+  }, [orders, currentUser]);
+
+  const visible = useMemo(
+    () => (repOnly ? customers.filter((c) => myCustomerNames.has(c.name.toLowerCase())) : customers),
+    [customers, repOnly, myCustomerNames],
+  );
+
   const rows = useMemo(
     () =>
-      customers
+      visible
         .filter(
           (c) =>
             c.name.toLowerCase().includes(query.toLowerCase()) && (!debtOnly || c.balance > 0),
         )
         .sort((a, b) => b.balance - a.balance),
-    [customers, query, debtOnly],
+    [visible, query, debtOnly],
   );
 
   const totalDebt = customers.reduce((sum, c) => sum + c.balance, 0);
 
+  const visibleSettlements = repOnly
+    ? settlements.filter((s) => myCustomerNames.has(s.customer.toLowerCase()))
+    : settlements;
+
   return (
     <AppShell
       title="Customers & Debt"
-      subtitle={`${customers.length} customers · ${formatMoney(totalDebt)} outstanding`}
+      subtitle={
+        repOnly
+          ? `${visible.length} of your customers · account balances only`
+          : `${customers.length} customers · ${formatMoney(totalDebt)} outstanding`
+      }
       actions={
         <Button size="sm" onClick={() => setNewOpen(true)}>
           <UserPlus className="size-4" /> New customer
@@ -175,7 +198,7 @@ function CustomersPage() {
           <h2 className="font-display text-sm font-semibold">Settlement log</h2>
           <p className="text-[11px] text-muted-foreground">Debt payments recorded in this shop</p>
           <ul className="mt-3 space-y-2">
-            {settlements.map((s) => (
+            {visibleSettlements.map((s) => (
               <li
                 key={s.id}
                 className="flex items-center justify-between gap-2 rounded-xl bg-secondary px-3 py-2 text-sm"
@@ -191,7 +214,7 @@ function CustomersPage() {
                 </span>
               </li>
             ))}
-            {settlements.length === 0 ? (
+            {visibleSettlements.length === 0 ? (
               <li className="rounded-xl border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
                 No settlements yet. Recorded payments appear here.
               </li>

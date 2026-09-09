@@ -372,7 +372,10 @@ export function PosProvider({ children }: { children: ReactNode }) {
       id: uid("o"),
       code: `AD-${Date.now().toString().slice(-6)}`,
       date: input.date,
-      createdAt: new Date().toISOString(),
+      createdAt:
+        input.date === new Date().toISOString().slice(0, 10)
+          ? new Date().toISOString()
+          : new Date(`${input.date}T12:00:00.000Z`).toISOString(),
       items: input.items,
       subtotal,
       discount,
