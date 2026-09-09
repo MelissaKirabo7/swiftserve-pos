@@ -39,12 +39,14 @@ export function PaymentModal({
   onOpenChange,
   items,
   customers,
+  canBackdate = false,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   items: CartLine[];
   customers: Customer[];
+  canBackdate?: boolean;
   onConfirm: (result: PaymentResult) => void;
 }) {
   const { total } = cartTotals(items);
