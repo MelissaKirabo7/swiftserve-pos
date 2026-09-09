@@ -65,6 +65,7 @@ export function PaymentModal({
       setSplitCash("");
       setNote("");
       setKeepChange(false);
+      setDate(new Date().toISOString().slice(0, 10));
     }
   }, [open, total]);
 
@@ -123,13 +124,22 @@ export function PaymentModal({
               </datalist>
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="pay-date">Sale date (back-date allowed)</Label>
+              <Label htmlFor="pay-date">
+                Sale date {canBackdate ? "(back-date allowed)" : ""}
+              </Label>
               <Input
                 id="pay-date"
                 type="date"
                 value={date}
+                max={new Date().toISOString().slice(0, 10)}
+                disabled={!canBackdate}
                 onChange={(e) => setDate(e.target.value)}
               />
+              {canBackdate ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Stock, tips and reports follow the date you pick.
+                </p>
+              ) : null}
             </div>
           </div>
 
