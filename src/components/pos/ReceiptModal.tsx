@@ -24,8 +24,8 @@ export function ReceiptModal({
 
         <div id="receipt-print" className="rounded-xl border border-dashed border-border p-4 text-sm">
           <div className="text-center">
-            <p className="font-display text-base font-bold">Aquila&apos;s Daddies</p>
-            <p className="text-[11px] text-muted-foreground">Popcorn · Kampala, UG</p>
+            <p className="font-display text-base font-bold tracking-wide">AQUILA&apos;S DADDIES</p>
+            <p className="text-[11px] text-muted-foreground">Kampala, Uganda</p>
             <p className="mt-1 text-[11px] text-muted-foreground numeric">
               {order.code} · {order.date}
             </p>
@@ -95,7 +95,7 @@ export function ReceiptModal({
           </dl>
 
           <p className="mt-3 text-center text-[11px] text-muted-foreground">
-            Thank you! Keep the crunch going.
+            Thank you for your business.
           </p>
         </div>
 

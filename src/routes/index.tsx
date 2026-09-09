@@ -173,6 +173,7 @@ function RegisterPage() {
         onOpenChange={setPayOpen}
         items={items}
         customers={customers}
+        canBackdate={currentUser?.role === "owner" || currentUser?.role === "superadmin"}
         onConfirm={confirmPayment}
       />
       <ReceiptModal order={receipt} open={Boolean(receipt)} onOpenChange={() => setReceipt(null)} />
