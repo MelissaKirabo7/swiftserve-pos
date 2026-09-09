@@ -198,7 +198,7 @@ function CustomersPage() {
           <h2 className="font-display text-sm font-semibold">Settlement log</h2>
           <p className="text-[11px] text-muted-foreground">Debt payments recorded in this shop</p>
           <ul className="mt-3 space-y-2">
-            {settlements.map((s) => (
+            {visibleSettlements.map((s) => (
               <li
                 key={s.id}
                 className="flex items-center justify-between gap-2 rounded-xl bg-secondary px-3 py-2 text-sm"
@@ -214,7 +214,7 @@ function CustomersPage() {
                 </span>
               </li>
             ))}
-            {settlements.length === 0 ? (
+            {visibleSettlements.length === 0 ? (
               <li className="rounded-xl border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
                 No settlements yet. Recorded payments appear here.
               </li>

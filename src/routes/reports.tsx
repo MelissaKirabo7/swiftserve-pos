@@ -211,6 +211,27 @@ function ReportsPage() {
     toast.success("CSV exported");
   };
 
+  const exportInvestorCsv = () => {
+    const lines = [
+      `Aquila's Daddies — Investor Overview Report`,
+      `Period,${start},${end}`,
+      `Prepared,${new Date().toISOString().slice(0, 10)}`,
+      "",
+      "Metric,Amount (UGX)",
+      `Total revenue,${revenue}`,
+      `Total transactions,${rangeOrders.length}`,
+      `Gross profit,${profit}`,
+      `Credit issued (accounts receivable),${credit}`,
+      `Cash collected (payments received),${collected + settled}`,
+    ];
+    download(
+      `aquilas-daddies-investor-overview-${start}_${end}.csv`,
+      lines.join("\n"),
+      "text/csv",
+    );
+    toast.success("Investor overview downloaded");
+  };
+
   return (
     <AppShell
       title="Reports"
@@ -313,12 +334,46 @@ function ReportsPage() {
           <Stat label="Collected" value={formatMoney(collected)} hint="Cash, wallet & card" />
           <Stat label="Credit issued" value={formatMoney(credit)} hint="Within this period" />
           <Stat label="Debt settled" value={formatMoney(settled)} hint="Payments on old debt" />
-          <Stat
-            label="Total outstanding"
-            value={formatMoney(outstanding)}
-            hint="All customers, all time"
-          />
+          {repOnly ? null : (
+            <Stat
+              label="Total outstanding"
+              value={formatMoney(outstanding)}
+              hint="All customers, all time"
+            />
+          )}
         </div>
+
+        {repOnly ? null : (
+          <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h2 className="font-display text-sm font-semibold">
+                  Investor Overview · {rangeLabel}
+                </h2>
+                <p className="text-[11px] text-muted-foreground">
+                  High-level financials only — no staff, tip or cost detail.
+                </p>
+              </div>
+              <Button size="sm" variant="secondary" onClick={exportInvestorCsv}>
+                <Download className="size-4" /> Download
+              </Button>
+            </div>
+            <dl className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {[
+                ["Total revenue", formatMoney(revenue)],
+                ["Transactions", String(rangeOrders.length)],
+                ["Gross profit", formatMoney(profit)],
+                ["Credit issued", formatMoney(credit)],
+                ["Cash collected", formatMoney(collected + settled)],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-secondary px-3 py-2">
+                  <dt className="text-[11px] text-muted-foreground">{label}</dt>
+                  <dd className="font-display text-base font-bold numeric">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        )}
 
         <div className={cn("grid gap-4", repOnly ? "xl:grid-cols-1" : "xl:grid-cols-3")}>
           <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
