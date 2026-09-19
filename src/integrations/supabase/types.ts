@@ -14,7 +14,57 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      app_users: {
+        Row: {
+          auth_user_id: string | null
+          created_at: string
+          id: string
+          name: string
+          passcode: string
+          role: string
+        }
+        Insert: {
+          auth_user_id?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          passcode: string
+          role: string
+        }
+        Update: {
+          auth_user_id?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          passcode?: string
+          role?: string
+        }
+        Relationships: []
+      }
+      pos_state: {
+        Row: {
+          data: Json
+          id: string
+          updated_at: string
+          updated_by: string | null
+          version: number
+        }
+        Insert: {
+          data?: Json
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+          version?: number
+        }
+        Update: {
+          data?: Json
+          id?: string
+          updated_at?: string
+          updated_by?: string | null
+          version?: number
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
