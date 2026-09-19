@@ -8,8 +8,16 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { SEED_PRODUCTS, SETTINGS, type Product } from "@/data/catalog";
 import { SEED_SALES } from "@/data/seed-sales";
+import {
+  listStaff,
+  provisionStaff,
+  removeStaff,
+  resolveLogin,
+  saveStaff,
+} from "@/lib/staff.functions";
 
 export type PaymentMethod = "Cash" | "Mobile Money" | "Card" | "Credit" | "Split";
 export type OrderStatus = "Paid" | "Partial" | "Unpaid" | "Refunded" | "Voided";
@@ -45,6 +53,12 @@ export type Order = {
   seller: string;
   sellerId?: string | undefined;
   note?: string | undefined;
+  /** Soft delete for mistaken entries. Distinct from the Voided audit status. */
+  deleted?: boolean | undefined;
+  deletedAt?: string | undefined;
+  deletedBy?: string | undefined;
+  editedAt?: string | undefined;
+  editedBy?: string | undefined;
 };
 
 export type Customer = {
@@ -106,24 +120,23 @@ export const ROLE_LABEL: Record<Role, string> = {
   rep: "Sales Rep",
 };
 
-export const SEED_USERS: User[] = [
-  { id: "u-super", name: "Superadmin", role: "superadmin", passcode: "0000" },
-  { id: "u-aquila", name: "Aquila", role: "owner", passcode: "1111" },
-  { id: "u-jeremy", name: "Jeremy", role: "rep", passcode: "2222" },
-];
+export type Settings = {
+  /** When on, sales reps may correct or delete their own sales. */
+  allowRepEdits: boolean;
+};
 
 type State = {
   products: Product[];
   orders: Order[];
   customers: Customer[];
   settlements: Settlement[];
-  users: User[];
   allocations: StockAllocation[];
   archives: ReportSnapshot[];
+  settings: Settings;
 };
 
-
-const STORAGE_KEY = "aquila-pos-v1";
+const LEGACY_KEY = "aquila-pos-v1";
+const STATE_ID = "main";
 
 function uid(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
@@ -190,8 +203,7 @@ function buildSeed(): State {
       amountPaid: sale.paid,
       balance: sale.balance,
       tip: 0,
-      status:
-        sale.status === "Paid" ? "Paid" : sale.status === "Partial" ? "Partial" : "Unpaid",
+      status: sale.status === "Paid" ? "Paid" : sale.status === "Partial" ? "Partial" : "Unpaid",
       customer: name,
       seller: sale.seller,
     });
@@ -202,11 +214,24 @@ function buildSeed(): State {
     orders: orders.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
     customers: [...customers.values()].sort((a, b) => a.name.localeCompare(b.name)),
     settlements: [],
-    users: SEED_USERS.map((u) => ({ ...u })),
     allocations: [],
     archives: [],
+    settings: { allowRepEdits: false },
   };
+}
 
+function normalize(raw: unknown): State | null {
+  const parsed = raw as Partial<State> | null;
+  if (!parsed || !Array.isArray(parsed.products) || !Array.isArray(parsed.orders)) return null;
+  return {
+    products: parsed.products,
+    orders: parsed.orders,
+    customers: parsed.customers ?? [],
+    settlements: parsed.settlements ?? [],
+    allocations: parsed.allocations ?? [],
+    archives: parsed.archives ?? [],
+    settings: { allowRepEdits: parsed.settings?.allowRepEdits ?? false },
+  };
 }
 
 export type CheckoutInput = {
@@ -223,12 +248,27 @@ export type CheckoutInput = {
   note?: string | undefined;
 };
 
-type StoreValue = State & {
+export type OrderEdit = {
+  items?: CartLine[];
+  customer?: string;
+  date?: string;
+  method?: PaymentMethod;
+  amountPaid?: number;
+  tip?: number;
+  note?: string;
+};
+
+type StoreValue = Omit<State, "orders"> & {
   ready: boolean;
+  syncing: boolean;
+  online: boolean;
+  orders: Order[];
+  deletedOrders: Order[];
+  users: User[];
   seller: string;
   setSeller: (name: string) => void;
   currentUser: User | null;
-  signIn: (name: string, passcode: string) => boolean;
+  signIn: (name: string, passcode: string) => Promise<boolean>;
   signOut: () => void;
   setPasscode: (userId: string, passcode: string) => void;
   upsertUser: (u: { id?: string; name: string; role: Role; passcode: string }) => void;
@@ -240,6 +280,13 @@ type StoreValue = State & {
   restock: (id: string, amount: number) => void;
   voidOrder: (id: string) => void;
   refundOrder: (id: string) => void;
+  /** Correct a mistaken sale in place. Recalculates stock, totals and balances. */
+  updateOrder: (id: string, edit: OrderEdit) => void;
+  /** Soft-delete a mistaken entry and roll back everything it changed. */
+  deleteOrderEntry: (id: string) => void;
+  restoreOrderEntry: (id: string) => void;
+  canEditOrder: (order: Order) => boolean;
+  setAllowRepEdits: (allow: boolean) => void;
   settleDebt: (customerName: string, amount: number, method: PaymentMethod) => void;
   upsertCustomer: (c: Omit<Customer, "id" | "balance" | "totalPaid" | "totalPackets">) => void;
   deleteCustomer: (id: string) => void;
@@ -294,7 +341,6 @@ export function findDuplicateGroups(customers: Customer[], threshold = 0.7) {
   return groups;
 }
 
-
 const PosContext = createContext<StoreValue | null>(null);
 
 export function lineTotal(line: CartLine) {
@@ -308,204 +354,512 @@ export function cartTotals(items: CartLine[]) {
   return { subtotal, discount, total: subtotal - discount, packets };
 }
 
+function orderProfit(items: CartLine[]) {
+  return items.reduce((sum, l) => {
+    const product = SEED_PRODUCTS.find((p) => p.id === l.productId);
+    const unitProfit = product ? product.price - product.cost : SETTINGS.profitPerPacket;
+    return sum + unitProfit * l.qty - l.discount;
+  }, 0);
+}
+
+/** Puts stock, allocations and customer figures back as if the order never happened. */
+function rollBack(prev: State, order: Order): State {
+  const products = prev.products.map((p) => {
+    const line = order.items.find((l) => l.productId === p.id);
+    return line ? { ...p, stock: p.stock + line.qty } : p;
+  });
+  const taken = new Map<string, number>();
+  const allocations = prev.allocations.map((a) => {
+    if (slug(a.rep) !== slug(order.seller) || a.sold <= 0) return a;
+    const line = order.items.find((l) => l.productId === a.productId);
+    if (!line) return a;
+    const already = taken.get(a.productId) ?? 0;
+    const give = Math.min(a.sold, line.qty - already);
+    if (give <= 0) return a;
+    taken.set(a.productId, already + give);
+    return { ...a, sold: a.sold - give };
+  });
+  const customers = prev.customers.map((c) =>
+    slug(c.name) === slug(order.customer)
+      ? {
+          ...c,
+          balance: Math.max(0, c.balance - order.balance),
+          totalPaid: Math.max(0, c.totalPaid - order.amountPaid),
+          totalPackets: Math.max(0, c.totalPackets - order.packets),
+        }
+      : c,
+  );
+  return { ...prev, products, allocations, customers };
+}
+
+/** Applies stock, allocation and customer effects of an order. */
+function applyEffects(prev: State, order: Order): State {
+  const fromAllocation = new Map<string, number>();
+  const allocations = prev.allocations.map((a) => {
+    if (slug(a.rep) !== slug(order.seller)) return a;
+    const line = order.items.find((l) => l.productId === a.productId);
+    if (!line) return a;
+    const already = fromAllocation.get(a.productId) ?? 0;
+    const take = Math.min(a.assigned - a.sold, line.qty - already);
+    if (take <= 0) return a;
+    fromAllocation.set(a.productId, already + take);
+    return { ...a, sold: a.sold + take };
+  });
+
+  const products = prev.products.map((p) => {
+    const line = order.items.find((l) => l.productId === p.id);
+    if (!line) return p;
+    const covered = fromAllocation.get(p.id) ?? 0;
+    return { ...p, stock: Math.max(0, p.stock - Math.max(0, line.qty - covered)) };
+  });
+
+  const key = slug(order.customer);
+  let customers = prev.customers;
+  const existing = customers.find((c) => slug(c.name) === key);
+  if (existing) {
+    customers = customers.map((c) =>
+      c.id === existing.id
+        ? {
+            ...c,
+            balance: c.balance + order.balance,
+            totalPaid: c.totalPaid + order.amountPaid,
+            totalPackets: c.totalPackets + order.packets,
+          }
+        : c,
+    );
+  } else {
+    customers = [
+      ...customers,
+      {
+        id: `c-${key}`,
+        name: order.customer,
+        creditLimit: SETTINGS.defaultCreditLimit,
+        balance: order.balance,
+        totalPaid: order.amountPaid,
+        totalPackets: order.packets,
+      },
+    ].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return { ...prev, products, allocations, customers };
+}
+
 export function PosProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<State>(() => buildSeed());
+  const [users, setUsers] = useState<User[]>([]);
   const [seller, setSeller] = useState<string>("Aquila");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const currentUserIdRef = useRef<string | null>(null);
   currentUserIdRef.current = currentUserId;
   const [ready, setReady] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [online, setOnline] = useState(true);
 
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const versionRef = useRef<number>(0);
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const loadedRef = useRef(false);
 
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as State & { seller?: string; currentUserId?: string };
-        if (parsed.products && parsed.orders) {
-          setState({
-            products: parsed.products,
-            orders: parsed.orders,
-            customers: parsed.customers ?? [],
-            settlements: parsed.settlements ?? [],
-            users: parsed.users?.length ? parsed.users : SEED_USERS.map((u) => ({ ...u })),
-            allocations: parsed.allocations ?? [],
-            archives: parsed.archives ?? [],
-          });
-        }
-        if (parsed.seller) setSeller(parsed.seller);
-        if (parsed.currentUserId) setCurrentUserId(parsed.currentUserId);
-      }
-
-    } catch {
-      /* ignore corrupted storage */
-    }
-    setReady(true);
+  const adopt = useCallback((raw: unknown, version: number) => {
+    const next = normalize(raw);
+    if (!next) return;
+    versionRef.current = version;
+    stateRef.current = next;
+    setState(next);
   }, []);
 
-  useEffect(() => {
-    if (!ready) return;
-    try {
-      window.localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ ...state, seller, currentUserId }),
-      );
+  /** Optimistic local write + version-checked push; replays on cross-device conflict. */
+  const apply = useCallback(
+    (mutator: (prev: State) => State) => {
+      const optimistic = mutator(stateRef.current);
+      stateRef.current = optimistic;
+      setState(optimistic);
+      if (!loadedRef.current) return;
 
-    } catch {
-      /* storage full or unavailable */
-    }
-  }, [state, seller, currentUserId, ready]);
+      setSyncing(true);
+      queueRef.current = queueRef.current
+        .then(async () => {
+          for (let attempt = 0; attempt < 4; attempt += 1) {
+            const base = stateRef.current;
+            const next = attempt === 0 ? base : mutator(base);
+            const { data, error } = await supabase
+              .from("pos_state")
+              .update({
+                data: next as never,
+                updated_by: currentUserIdRef.current,
+              })
+              .eq("id", STATE_ID)
+              .eq("version", versionRef.current)
+              .select("data, version");
 
-  const checkout = useCallback((input: CheckoutInput) => {
-    const { subtotal, discount, total, packets } = cartTotals(input.items);
-    const profit = input.items.reduce((sum, l) => {
-      const product = SEED_PRODUCTS.find((p) => p.id === l.productId);
-      const unitProfit = product ? product.price - product.cost : SETTINGS.profitPerPacket;
-      return sum + unitProfit * l.qty - l.discount;
-    }, 0);
-    const tip = Math.max(0, Math.round(input.tip ?? 0));
-    const amountPaid = Math.min(input.amountPaid, total);
-    const balance = Math.max(0, total - amountPaid);
-    const status: OrderStatus = balance === 0 ? "Paid" : amountPaid > 0 ? "Partial" : "Unpaid";
-
-    const order: Order = {
-      id: uid("o"),
-      code: `AD-${Date.now().toString().slice(-6)}`,
-      date: input.date,
-      createdAt:
-        input.date === new Date().toISOString().slice(0, 10)
-          ? new Date().toISOString()
-          : new Date(`${input.date}T12:00:00.000Z`).toISOString(),
-      items: input.items,
-      subtotal,
-      discount,
-      total,
-      profit,
-      packets,
-      method: input.method,
-      splitCash: input.splitCash,
-      splitOther: input.splitOther,
-      amountPaid,
-      balance,
-      tip,
-      status,
-      customer: input.customer,
-      seller: input.seller,
-      sellerId: input.sellerId,
-      note: input.note,
-    };
-
-    setState((prev) => {
-      const repAllocs = prev.allocations.filter(
-        (a) => slug(a.rep) === slug(input.seller) && a.assigned - a.sold > 0,
-      );
-      const fromAllocation = new Map<string, number>();
-      const allocations = prev.allocations.map((a) => {
-        if (slug(a.rep) !== slug(input.seller)) return a;
-        const line = input.items.find((l) => l.productId === a.productId);
-        if (!line) return a;
-        const already = fromAllocation.get(a.productId) ?? 0;
-        const take = Math.min(a.assigned - a.sold, line.qty - already);
-        if (take <= 0) return a;
-        fromAllocation.set(a.productId, already + take);
-        return { ...a, sold: a.sold + take };
-      });
-      void repAllocs;
-
-      const products = prev.products.map((p) => {
-        const line = input.items.find((l) => l.productId === p.id);
-        if (!line) return p;
-        const covered = fromAllocation.get(p.id) ?? 0;
-        const remainder = Math.max(0, line.qty - covered);
-        return { ...p, stock: Math.max(0, p.stock - remainder) };
-      });
-
-      const key = slug(input.customer);
-      let customers = prev.customers;
-      const existing = customers.find((c) => slug(c.name) === key);
-      if (existing) {
-        customers = customers.map((c) =>
-          c.id === existing.id
-            ? {
-                ...c,
-                balance: c.balance + balance,
-                totalPaid: c.totalPaid + amountPaid,
-                totalPackets: c.totalPackets + packets,
-              }
-            : c,
-        );
-      } else {
-        customers = [
-          ...customers,
-          {
-            id: `c-${key}`,
-            name: input.customer,
-            creditLimit: SETTINGS.defaultCreditLimit,
-            balance,
-            totalPaid: amountPaid,
-            totalPackets: packets,
-          },
-        ].sort((a, b) => a.name.localeCompare(b.name));
-      }
-
-      return { ...prev, products, allocations, customers, orders: [order, ...prev.orders] };
-    });
-
-    return order;
-  }, []);
-
-  const updateProduct = useCallback((id: string, patch: Partial<Product>) => {
-    setState((prev) => ({
-      ...prev,
-      products: prev.products.map((p) => (p.id === id ? { ...p, ...patch } : p)),
-    }));
-  }, []);
-
-  const restock = useCallback((id: string, amount: number) => {
-    setState((prev) => ({
-      ...prev,
-      products: prev.products.map((p) =>
-        p.id === id ? { ...p, stock: Math.max(0, p.stock + amount) } : p,
-      ),
-    }));
-  }, []);
-
-  const reverseOrder = useCallback((id: string, status: OrderStatus) => {
-    setState((prev) => {
-      const order = prev.orders.find((o) => o.id === id);
-      if (!order || order.status === "Voided" || order.status === "Refunded") return prev;
-      const products = prev.products.map((p) => {
-        const line = order.items.find((l) => l.productId === p.id);
-        return line ? { ...p, stock: p.stock + line.qty } : p;
-      });
-      const customers = prev.customers.map((c) =>
-        slug(c.name) === slug(order.customer)
-          ? {
-              ...c,
-              balance: Math.max(0, c.balance - order.balance),
-              totalPaid: Math.max(0, c.totalPaid - order.amountPaid),
-              totalPackets: Math.max(0, c.totalPackets - order.packets),
+            if (!error && data && data.length > 0) {
+              versionRef.current = data[0]!.version;
+              stateRef.current = next;
+              setState(next);
+              setOnline(true);
+              return;
             }
-          : c,
+            if (error) {
+              setOnline(false);
+              return;
+            }
+            // Another device wrote first: take their state, then replay this change.
+            const fresh = await supabase
+              .from("pos_state")
+              .select("data, version")
+              .eq("id", STATE_ID)
+              .maybeSingle();
+            if (!fresh.data) return;
+            versionRef.current = fresh.data.version;
+            stateRef.current = normalize(fresh.data.data) ?? stateRef.current;
+          }
+        })
+        .catch(() => setOnline(false))
+        .finally(() => setSyncing(false));
+    },
+    [],
+  );
+
+  const loadUsers = useCallback(async () => {
+    const { data } = await supabase.from("app_users").select("id, name, role, auth_user_id");
+    if (data) {
+      setUsers(
+        data.map((u) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role as Role,
+          passcode: "",
+        })),
       );
-      return {
-        ...prev,
-        products,
-        customers,
-        orders: prev.orders.map((o) => (o.id === id ? { ...o, status, balance: 0 } : o)),
-      };
-    });
+      return data;
+    }
+    return [];
   }, []);
+
+  const resolveCurrent = useCallback(async () => {
+    const { data: session } = await supabase.auth.getSession();
+    const authId = session.session?.user.id;
+    if (!authId) {
+      setCurrentUserId(null);
+      return;
+    }
+    const { data } = await supabase
+      .from("app_users")
+      .select("id, name, role, auth_user_id")
+      .eq("auth_user_id", authId)
+      .maybeSingle();
+    if (data) {
+      setCurrentUserId(data.id);
+      if (data.role !== "superadmin") setSeller(data.name);
+    }
+  }, []);
+
+  // Initial load: staff list, session, shared shop state (bootstrapped once).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await provisionStaff();
+      } catch {
+        /* already provisioned or offline */
+      }
+      try {
+        const staff = await listStaff();
+        if (!cancelled) {
+          setUsers(staff.map((s) => ({ ...s, passcode: "" })));
+        }
+      } catch {
+        /* offline */
+      }
+
+      await resolveCurrent();
+
+      try {
+        const { data } = await supabase
+          .from("pos_state")
+          .select("data, version")
+          .eq("id", STATE_ID)
+          .maybeSingle();
+        if (cancelled) return;
+        const remote = normalize(data?.data);
+        if (remote) {
+          adopt(remote, data?.version ?? 0);
+        } else {
+          // First run: take whatever this device already had as the starting point.
+          let local: State | null = null;
+          try {
+            const raw = window.localStorage.getItem(LEGACY_KEY);
+            if (raw) local = normalize(JSON.parse(raw));
+          } catch {
+            /* ignore corrupted storage */
+          }
+          const seeded = local ?? buildSeed();
+          versionRef.current = data?.version ?? 0;
+          stateRef.current = seeded;
+          setState(seeded);
+          loadedRef.current = true;
+          await supabase
+            .from("pos_state")
+            .update({ data: seeded as never })
+            .eq("id", STATE_ID)
+            .eq("version", versionRef.current);
+          const after = await supabase
+            .from("pos_state")
+            .select("version")
+            .eq("id", STATE_ID)
+            .maybeSingle();
+          if (after.data) versionRef.current = after.data.version;
+        }
+        loadedRef.current = true;
+      } catch {
+        setOnline(false);
+      }
+      if (!cancelled) setReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adopt, resolveCurrent]);
+
+  // Live updates from every other device / session.
+  useEffect(() => {
+    const channel = supabase
+      .channel("pos-state")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "pos_state" },
+        (payload) => {
+          const row = payload.new as { data?: unknown; version?: number } | null;
+          if (!row || typeof row.version !== "number") return;
+          if (row.version === versionRef.current) return;
+          adopt(row.data, row.version);
+        },
+      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "app_users" }, () => {
+        void loadUsers();
+      })
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [adopt, loadUsers]);
+
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") setCurrentUserId(null);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  const checkout = useCallback(
+    (input: CheckoutInput) => {
+      const { subtotal, discount, total, packets } = cartTotals(input.items);
+      const tip = Math.max(0, Math.round(input.tip ?? 0));
+      const amountPaid = Math.min(input.amountPaid, total);
+      const balance = Math.max(0, total - amountPaid);
+      const status: OrderStatus = balance === 0 ? "Paid" : amountPaid > 0 ? "Partial" : "Unpaid";
+
+      const order: Order = {
+        id: uid("o"),
+        code: `AD-${Date.now().toString().slice(-6)}`,
+        date: input.date,
+        createdAt:
+          input.date === new Date().toISOString().slice(0, 10)
+            ? new Date().toISOString()
+            : new Date(`${input.date}T12:00:00.000Z`).toISOString(),
+        items: input.items,
+        subtotal,
+        discount,
+        total,
+        profit: orderProfit(input.items),
+        packets,
+        method: input.method,
+        splitCash: input.splitCash,
+        splitOther: input.splitOther,
+        amountPaid,
+        balance,
+        tip,
+        status,
+        customer: input.customer,
+        seller: input.seller,
+        sellerId: input.sellerId,
+        note: input.note,
+      };
+
+      apply((prev) => {
+        const next = applyEffects(prev, order);
+        return { ...next, orders: [order, ...next.orders] };
+      });
+
+      return order;
+    },
+    [apply],
+  );
+
+  const updateProduct = useCallback(
+    (id: string, patch: Partial<Product>) => {
+      apply((prev) => ({
+        ...prev,
+        products: prev.products.map((p) => (p.id === id ? { ...p, ...patch } : p)),
+      }));
+    },
+    [apply],
+  );
+
+  const restock = useCallback(
+    (id: string, amount: number) => {
+      apply((prev) => ({
+        ...prev,
+        products: prev.products.map((p) =>
+          p.id === id ? { ...p, stock: Math.max(0, p.stock + amount) } : p,
+        ),
+      }));
+    },
+    [apply],
+  );
+
+  const reverseOrder = useCallback(
+    (id: string, status: OrderStatus) => {
+      apply((prev) => {
+        const order = prev.orders.find((o) => o.id === id);
+        if (!order || order.status === "Voided" || order.status === "Refunded") return prev;
+        const next = rollBack(prev, order);
+        return {
+          ...next,
+          orders: next.orders.map((o) => (o.id === id ? { ...o, status, balance: 0 } : o)),
+        };
+      });
+    },
+    [apply],
+  );
 
   const voidOrder = useCallback((id: string) => reverseOrder(id, "Voided"), [reverseOrder]);
   const refundOrder = useCallback((id: string) => reverseOrder(id, "Refunded"), [reverseOrder]);
 
+  /** Correction path: rewrites the entry itself instead of leaving a void record. */
+  const updateOrder = useCallback(
+    (id: string, edit: OrderEdit) => {
+      const actor = currentUserIdRef.current;
+      apply((prev) => {
+        const order = prev.orders.find((o) => o.id === id);
+        if (!order) return prev;
+
+        const live = order.status !== "Voided" && order.status !== "Refunded";
+        const base = live ? rollBack(prev, order) : prev;
+
+        const items = edit.items ?? order.items;
+        const { subtotal, discount, total, packets } = cartTotals(items);
+        const method = edit.method ?? order.method;
+        const amountPaid = Math.min(
+          Math.max(0, Math.round(edit.amountPaid ?? order.amountPaid)),
+          total,
+        );
+        const balance = Math.max(0, total - amountPaid);
+        const date = edit.date ?? order.date;
+
+        const updated: Order = {
+          ...order,
+          items,
+          subtotal,
+          discount,
+          total,
+          packets,
+          profit: orderProfit(items),
+          method,
+          amountPaid,
+          balance,
+          tip: Math.max(0, Math.round(edit.tip ?? order.tip)),
+          customer: (edit.customer ?? order.customer).trim() || order.customer,
+          date,
+          createdAt:
+            date === order.date
+              ? order.createdAt
+              : new Date(`${date}T12:00:00.000Z`).toISOString(),
+          note: edit.note ?? order.note,
+          status: live
+            ? balance === 0
+              ? "Paid"
+              : amountPaid > 0
+                ? "Partial"
+                : "Unpaid"
+            : order.status,
+          editedAt: new Date().toISOString(),
+          editedBy: actor ?? undefined,
+        };
+
+        const next = live ? applyEffects(base, updated) : base;
+        return { ...next, orders: next.orders.map((o) => (o.id === id ? updated : o)) };
+      });
+    },
+    [apply],
+  );
+
+  /** Soft delete for mistakes: hidden everywhere, fully rolled back, recoverable. */
+  const deleteOrderEntry = useCallback(
+    (id: string) => {
+      const actor = currentUserIdRef.current;
+      apply((prev) => {
+        const order = prev.orders.find((o) => o.id === id);
+        if (!order || order.deleted) return prev;
+        const live = order.status !== "Voided" && order.status !== "Refunded";
+        const next = live ? rollBack(prev, order) : prev;
+        return {
+          ...next,
+          orders: next.orders.map((o) =>
+            o.id === id
+              ? {
+                  ...o,
+                  deleted: true,
+                  deletedAt: new Date().toISOString(),
+                  deletedBy: actor ?? undefined,
+                }
+              : o,
+          ),
+        };
+      });
+    },
+    [apply],
+  );
+
+  const restoreOrderEntry = useCallback(
+    (id: string) => {
+      apply((prev) => {
+        const order = prev.orders.find((o) => o.id === id);
+        if (!order || !order.deleted) return prev;
+        const restored: Order = {
+          ...order,
+          deleted: false,
+          deletedAt: undefined,
+          deletedBy: undefined,
+        };
+        const live = restored.status !== "Voided" && restored.status !== "Refunded";
+        const next = live ? applyEffects(prev, restored) : prev;
+        return { ...next, orders: next.orders.map((o) => (o.id === id ? restored : o)) };
+      });
+    },
+    [apply],
+  );
+
+  const setAllowRepEdits = useCallback(
+    (allowRepEdits: boolean) => {
+      apply((prev) => ({ ...prev, settings: { ...prev.settings, allowRepEdits } }));
+    },
+    [apply],
+  );
+
   const settleDebt = useCallback(
     (customerName: string, amount: number, method: PaymentMethod) => {
-      setState((prev) => {
+      apply((prev) => {
         let remaining = amount;
         const orders = prev.orders.map((o) => {
-          if (slug(o.customer) !== slug(customerName) || o.balance <= 0 || remaining <= 0) return o;
+          if (
+            o.deleted ||
+            slug(o.customer) !== slug(customerName) ||
+            o.balance <= 0 ||
+            remaining <= 0
+          )
+            return o;
           const applied = Math.min(o.balance, remaining);
           remaining -= applied;
           const balance = o.balance - applied;
@@ -535,79 +889,89 @@ export function PosProvider({ children }: { children: ReactNode }) {
         return { ...prev, orders, customers, settlements: [settlement, ...prev.settlements] };
       });
     },
-    [],
+    [apply],
   );
 
-  const upsertCustomer = useCallback<StoreValue["upsertCustomer"]>((input) => {
-    setState((prev) => {
-      const key = slug(input.name);
-      const existing = prev.customers.find((c) => slug(c.name) === key);
-      if (existing) {
+  const upsertCustomer = useCallback<StoreValue["upsertCustomer"]>(
+    (input) => {
+      apply((prev) => {
+        const key = slug(input.name);
+        const existing = prev.customers.find((c) => slug(c.name) === key);
+        if (existing) {
+          return {
+            ...prev,
+            customers: prev.customers.map((c) => (c.id === existing.id ? { ...c, ...input } : c)),
+          };
+        }
         return {
           ...prev,
-          customers: prev.customers.map((c) => (c.id === existing.id ? { ...c, ...input } : c)),
+          customers: [
+            ...prev.customers,
+            { id: `c-${key}`, balance: 0, totalPaid: 0, totalPackets: 0, ...input },
+          ].sort((a, b) => a.name.localeCompare(b.name)),
         };
-      }
-      return {
-        ...prev,
-        customers: [
-          ...prev.customers,
-          { id: `c-${key}`, balance: 0, totalPaid: 0, totalPackets: 0, ...input },
-        ].sort((a, b) => a.name.localeCompare(b.name)),
-      };
-    });
-  }, []);
+      });
+    },
+    [apply],
+  );
 
-  const deleteCustomer = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, customers: prev.customers.filter((c) => c.id !== id) }));
-  }, []);
+  const deleteCustomer = useCallback(
+    (id: string) => {
+      apply((prev) => ({ ...prev, customers: prev.customers.filter((c) => c.id !== id) }));
+    },
+    [apply],
+  );
 
-  const mergeCustomers = useCallback((targetId: string, sourceIds: string[]) => {
-    setState((prev) => {
-      const target = prev.customers.find((c) => c.id === targetId);
-      if (!target) return prev;
-      const sources = prev.customers.filter(
-        (c) => sourceIds.includes(c.id) && c.id !== targetId,
-      );
-      if (sources.length === 0) return prev;
-      const sourceNames = new Set(sources.map((c) => slug(c.name)));
+  const mergeCustomers = useCallback(
+    (targetId: string, sourceIds: string[]) => {
+      apply((prev) => {
+        const target = prev.customers.find((c) => c.id === targetId);
+        if (!target) return prev;
+        const sources = prev.customers.filter((c) => sourceIds.includes(c.id) && c.id !== targetId);
+        if (sources.length === 0) return prev;
+        const sourceNames = new Set(sources.map((c) => slug(c.name)));
 
-      const merged: Customer = {
-        ...target,
-        creditLimit: Math.max(target.creditLimit, ...sources.map((c) => c.creditLimit)),
-        balance: target.balance + sources.reduce((t, c) => t + c.balance, 0),
-        totalPaid: target.totalPaid + sources.reduce((t, c) => t + c.totalPaid, 0),
-        totalPackets: target.totalPackets + sources.reduce((t, c) => t + c.totalPackets, 0),
-      };
+        const merged: Customer = {
+          ...target,
+          creditLimit: Math.max(target.creditLimit, ...sources.map((c) => c.creditLimit)),
+          balance: target.balance + sources.reduce((t, c) => t + c.balance, 0),
+          totalPaid: target.totalPaid + sources.reduce((t, c) => t + c.totalPaid, 0),
+          totalPackets: target.totalPackets + sources.reduce((t, c) => t + c.totalPackets, 0),
+        };
 
-      return {
-        ...prev,
-        customers: prev.customers
-          .filter((c) => !sourceNames.has(slug(c.name)) || c.id === targetId)
-          .map((c) => (c.id === targetId ? merged : c)),
-        orders: prev.orders.map((o) =>
-          sourceNames.has(slug(o.customer)) ? { ...o, customer: target.name } : o,
-        ),
-        settlements: prev.settlements.map((s) =>
-          sourceNames.has(slug(s.customer)) ? { ...s, customer: target.name } : s,
-        ),
-      };
-    });
-  }, []);
+        return {
+          ...prev,
+          customers: prev.customers
+            .filter((c) => !sourceNames.has(slug(c.name)) || c.id === targetId)
+            .map((c) => (c.id === targetId ? merged : c)),
+          orders: prev.orders.map((o) =>
+            sourceNames.has(slug(o.customer)) ? { ...o, customer: target.name } : o,
+          ),
+          settlements: prev.settlements.map((s) =>
+            sourceNames.has(slug(s.customer)) ? { ...s, customer: target.name } : s,
+          ),
+        };
+      });
+    },
+    [apply],
+  );
 
-  const addProduct = useCallback<StoreValue["addProduct"]>((input) => {
-    setState((prev) => ({
-      ...prev,
-      products: [...prev.products, { ...input, id: uid("p") }],
-    }));
-  }, []);
+  const addProduct = useCallback<StoreValue["addProduct"]>(
+    (input) => {
+      apply((prev) => ({ ...prev, products: [...prev.products, { ...input, id: uid("p") }] }));
+    },
+    [apply],
+  );
 
-  const deleteProduct = useCallback((id: string) => {
-    setState((prev) => ({ ...prev, products: prev.products.filter((p) => p.id !== id) }));
-  }, []);
+  const deleteProduct = useCallback(
+    (id: string) => {
+      apply((prev) => ({ ...prev, products: prev.products.filter((p) => p.id !== id) }));
+    },
+    [apply],
+  );
 
   const purgeTransactions = useCallback(() => {
-    setState((prev) => ({
+    apply((prev) => ({
       ...prev,
       orders: [],
       settlements: [],
@@ -618,138 +982,141 @@ export function PosProvider({ children }: { children: ReactNode }) {
         totalPackets: 0,
       })),
     }));
-  }, []);
+  }, [apply]);
 
-  const delegateStock = useCallback<StoreValue["delegateStock"]>((rep, productId, qty) => {
-    setState((prev) => {
-      const product = prev.products.find((p) => p.id === productId);
-      const amount = Math.min(Math.max(0, Math.round(qty)), product?.stock ?? 0);
-      if (!product || amount <= 0) return prev;
-      const allocation: StockAllocation = {
-        id: uid("a"),
-        rep,
-        productId,
-        assigned: amount,
-        sold: 0,
-        assignedAt: new Date().toISOString(),
-        assignedBy: prev.users.find((u) => u.id === currentUserIdRef.current)?.name ?? "Owner",
-      };
-      return {
-        ...prev,
-        products: prev.products.map((p) =>
-          p.id === productId ? { ...p, stock: p.stock - amount } : p,
-        ),
-        allocations: [allocation, ...prev.allocations],
-      };
-    });
-  }, []);
-
-  const returnStock = useCallback<StoreValue["returnStock"]>((allocationId, qty) => {
-    setState((prev) => {
-      const alloc = prev.allocations.find((a) => a.id === allocationId);
-      if (!alloc) return prev;
-      const amount = Math.min(Math.max(0, Math.round(qty)), alloc.assigned - alloc.sold);
-      if (amount <= 0) return prev;
-      return {
-        ...prev,
-        products: prev.products.map((p) =>
-          p.id === alloc.productId ? { ...p, stock: p.stock + amount } : p,
-        ),
-        allocations: prev.allocations
-          .map((a) => (a.id === allocationId ? { ...a, assigned: a.assigned - amount } : a))
-          .filter((a) => a.assigned > 0),
-      };
-    });
-  }, []);
-
-  const saveSnapshot = useCallback<StoreValue["saveSnapshot"]>((snap) => {
-    setState((prev) => {
-      const existing = prev.archives.find(
-        (a) => a.start === snap.start && a.end === snap.end && a.label === snap.label,
-      );
-      const record: ReportSnapshot = {
-        ...snap,
-        id: existing?.id ?? uid("snap"),
-        createdAt: new Date().toISOString(),
-      };
-      return {
-        ...prev,
-        archives: [record, ...prev.archives.filter((a) => a.id !== record.id)].slice(0, 400),
-      };
-    });
-  }, []);
-
-  const signIn = useCallback(
-    (name: string, passcode: string) => {
-      const user = state.users.find(
-        (u) => u.name.toLowerCase() === name.trim().toLowerCase() && u.passcode === passcode,
-      );
-      if (!user) return false;
-      setCurrentUserId(user.id);
-      if (user.role !== "superadmin") setSeller(user.name);
-      return true;
-    },
-    [state.users],
-  );
-
-  const signOut = useCallback(() => setCurrentUserId(null), []);
-
-  const setPasscode = useCallback((userId: string, passcode: string) => {
-    setState((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => (u.id === userId ? { ...u, passcode } : u)),
-    }));
-  }, []);
-
-  const upsertUser = useCallback<StoreValue["upsertUser"]>((input) => {
-    setState((prev) => {
-      const existing = input.id
-        ? prev.users.find((u) => u.id === input.id)
-        : prev.users.find((u) => u.name.toLowerCase() === input.name.toLowerCase());
-      if (existing) {
+  const delegateStock = useCallback<StoreValue["delegateStock"]>(
+    (rep, productId, qty) => {
+      const assignedBy = users.find((u) => u.id === currentUserIdRef.current)?.name ?? "Owner";
+      apply((prev) => {
+        const product = prev.products.find((p) => p.id === productId);
+        const amount = Math.min(Math.max(0, Math.round(qty)), product?.stock ?? 0);
+        if (!product || amount <= 0) return prev;
+        const allocation: StockAllocation = {
+          id: uid("a"),
+          rep,
+          productId,
+          assigned: amount,
+          sold: 0,
+          assignedAt: new Date().toISOString(),
+          assignedBy,
+        };
         return {
           ...prev,
-          users: prev.users.map((u) =>
-            u.id === existing.id
-              ? { ...u, name: input.name, role: input.role, passcode: input.passcode }
-              : u,
+          products: prev.products.map((p) =>
+            p.id === productId ? { ...p, stock: p.stock - amount } : p,
           ),
+          allocations: [allocation, ...prev.allocations],
         };
+      });
+    },
+    [apply, users],
+  );
+
+  const returnStock = useCallback<StoreValue["returnStock"]>(
+    (allocationId, qty) => {
+      apply((prev) => {
+        const alloc = prev.allocations.find((a) => a.id === allocationId);
+        if (!alloc) return prev;
+        const amount = Math.min(Math.max(0, Math.round(qty)), alloc.assigned - alloc.sold);
+        if (amount <= 0) return prev;
+        return {
+          ...prev,
+          products: prev.products.map((p) =>
+            p.id === alloc.productId ? { ...p, stock: p.stock + amount } : p,
+          ),
+          allocations: prev.allocations
+            .map((a) => (a.id === allocationId ? { ...a, assigned: a.assigned - amount } : a))
+            .filter((a) => a.assigned > 0),
+        };
+      });
+    },
+    [apply],
+  );
+
+  const saveSnapshot = useCallback<StoreValue["saveSnapshot"]>(
+    (snap) => {
+      apply((prev) => {
+        const existing = prev.archives.find(
+          (a) => a.start === snap.start && a.end === snap.end && a.label === snap.label,
+        );
+        const record: ReportSnapshot = {
+          ...snap,
+          id: existing?.id ?? uid("snap"),
+          createdAt: new Date().toISOString(),
+        };
+        return {
+          ...prev,
+          archives: [record, ...prev.archives.filter((a) => a.id !== record.id)].slice(0, 400),
+        };
+      });
+    },
+    [apply],
+  );
+
+  const signIn = useCallback(
+    async (name: string, passcode: string) => {
+      try {
+        const login = await resolveLogin({ data: { name, passcode } });
+        if (!login.ok) return false;
+        const { error } = await supabase.auth.signInWithPassword({
+          email: login.email,
+          password: login.password,
+        });
+        if (error) return false;
+        await loadUsers();
+        await resolveCurrent();
+        return true;
+      } catch {
+        return false;
       }
-      return {
-        ...prev,
-        users: [
-          ...prev.users,
-          { id: uid("u"), name: input.name, role: input.role, passcode: input.passcode },
-        ],
-      };
-    });
+    },
+    [loadUsers, resolveCurrent],
+  );
+
+  const signOut = useCallback(() => {
+    setCurrentUserId(null);
+    void supabase.auth.signOut();
+  }, []);
+
+  const setPasscode = useCallback(
+    (userId: string, passcode: string) => {
+      const user = users.find((u) => u.id === userId);
+      if (!user) return;
+      void saveStaff({ data: { id: userId, name: user.name, role: user.role, passcode } });
+    },
+    [users],
+  );
+
+  const upsertUser = useCallback<StoreValue["upsertUser"]>((input) => {
+    void saveStaff({
+      data: {
+        ...(input.id ? { id: input.id } : {}),
+        name: input.name,
+        role: input.role,
+        passcode: input.passcode,
+      },
+    }).then(() => supabase.from("app_users").select("id").then(() => undefined));
   }, []);
 
   const deleteUser = useCallback((userId: string) => {
-    setState((prev) => ({ ...prev, users: prev.users.filter((u) => u.id !== userId) }));
+    void removeStaff({ data: { id: userId } });
   }, []);
 
   // Automated daily snapshots: summaries survive even if raw transactions are purged.
   useEffect(() => {
     if (!ready) return;
-    setState((prev) => {
+    apply((prev) => {
       const cutoff = new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-      const days = [
-        ...new Set(
-          prev.orders
-            .filter((o) => o.date >= cutoff && o.status !== "Voided" && o.status !== "Refunded")
-            .map((o) => o.date),
-        ),
-      ];
+      const live = prev.orders.filter(
+        (o) => !o.deleted && o.status !== "Voided" && o.status !== "Refunded",
+      );
+      const days = [...new Set(live.filter((o) => o.date >= cutoff).map((o) => o.date))];
       const missing = days.filter(
         (d) => !prev.archives.some((a) => a.label === "Daily" && a.start === d && a.end === d),
       );
       if (missing.length === 0) return prev;
       const snaps: ReportSnapshot[] = missing.map((d) => {
-        const list = prev.orders.filter(
-          (o) => o.date === d && o.status !== "Voided" && o.status !== "Refunded",
-        );
+        const list = live.filter((o) => o.date === d);
         return {
           id: uid("snap"),
           label: "Daily",
@@ -767,6 +1134,7 @@ export function PosProvider({ children }: { children: ReactNode }) {
       });
       return { ...prev, archives: [...snaps, ...prev.archives].slice(0, 400) };
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
   const repAvailable = useCallback<StoreValue["repAvailable"]>(
@@ -777,17 +1145,34 @@ export function PosProvider({ children }: { children: ReactNode }) {
     [state.allocations],
   );
 
-  const resetData = useCallback(() => setState(buildSeed()), []);
+  const resetData = useCallback(() => apply(() => buildSeed()), [apply]);
 
   const currentUser = useMemo(
-    () => state.users.find((u) => u.id === currentUserId) ?? null,
-    [state.users, currentUserId],
+    () => users.find((u) => u.id === currentUserId) ?? null,
+    [users, currentUserId],
   );
+
+  const canEditOrder = useCallback(
+    (order: Order) => {
+      if (!currentUser) return false;
+      if (currentUser.role === "owner" || currentUser.role === "superadmin") return true;
+      return state.settings.allowRepEdits && slug(order.seller) === slug(currentUser.name);
+    },
+    [currentUser, state.settings.allowRepEdits],
+  );
+
+  const liveOrders = useMemo(() => state.orders.filter((o) => !o.deleted), [state.orders]);
+  const deletedOrders = useMemo(() => state.orders.filter((o) => o.deleted), [state.orders]);
 
   const value = useMemo<StoreValue>(
     () => ({
       ...state,
+      orders: liveOrders,
+      deletedOrders,
+      users,
       ready,
+      syncing,
+      online,
       seller,
       setSeller,
       currentUser,
@@ -803,6 +1188,11 @@ export function PosProvider({ children }: { children: ReactNode }) {
       restock,
       voidOrder,
       refundOrder,
+      updateOrder,
+      deleteOrderEntry,
+      restoreOrderEntry,
+      canEditOrder,
+      setAllowRepEdits,
       settleDebt,
       upsertCustomer,
       deleteCustomer,
@@ -816,7 +1206,12 @@ export function PosProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      liveOrders,
+      deletedOrders,
+      users,
       ready,
+      syncing,
+      online,
       seller,
       currentUser,
       signIn,
@@ -831,6 +1226,11 @@ export function PosProvider({ children }: { children: ReactNode }) {
       restock,
       voidOrder,
       refundOrder,
+      updateOrder,
+      deleteOrderEntry,
+      restoreOrderEntry,
+      canEditOrder,
+      setAllowRepEdits,
       settleDebt,
       upsertCustomer,
       deleteCustomer,
@@ -843,7 +1243,6 @@ export function PosProvider({ children }: { children: ReactNode }) {
       resetData,
     ],
   );
-
 
   return <PosContext.Provider value={value}>{children}</PosContext.Provider>;
 }
