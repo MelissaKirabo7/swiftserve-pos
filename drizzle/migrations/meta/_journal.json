@@ -8,6 +8,13 @@
       "when": 1789819433559,
       "tag": "0000_create_pos_shared_state",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789896211570,
+      "tag": "0001_restrict_app_users_passcode_column",
+      "breakpoints": true
     }
   ]
 }
