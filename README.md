@@ -1,10 +1,6 @@
 # SwiftServe POS
 
-Role & Goal You are an expert full-stack developer and UI/UX designer. Build a modern, highly responsive Point of Sale (POS) web application based strictly on the provided Requirements Document and Excel dataset.
 
-Core Workflow & Data Source
-
-Database & Logic: Use the attached Requirements Document to establish the core feature requirements, user roles, business logic, checkout flow, and validation rules.
 
 Data Schema & Mock Data: Use the attached Excel Sheet to define the data structures (e.g., inventory items, pricing, categories, tax rates, customer data) and pre-populate the application with realistic seed data.
 
