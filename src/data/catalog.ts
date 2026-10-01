@@ -33,16 +33,6 @@ export const SEED_PRODUCTS: Product[] = [
     sku: "DP-SALT-01",
   },
   {
-    id: "p-caramel",
-    name: "Daddies Caramel Popcorn",
-    category: "Packets",
-    price: 1500,
-    cost: 1000,
-    stock: 96,
-    packets: 1,
-    sku: "DP-CARA-01",
-  },
-  {
     id: "p-cheese",
     name: "Daddies Cheese Popcorn",
     category: "Packets",

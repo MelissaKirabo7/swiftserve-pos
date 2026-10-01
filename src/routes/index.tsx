@@ -25,7 +25,7 @@ export const Route = createFileRoute("/")({
       { property: "og:title", content: "Register · Aquila's Daddies POS" },
       {
         property: "og:description",
-        content: "Ring up popcorn sales, take split payments and track credit in seconds.",
+        content: "Ring up Daddies sales, take split payments and track credit in seconds.",
       },
     ],
   }),
