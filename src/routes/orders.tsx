@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
-import { Receipt, RotateCcw, Search, Ban } from "lucide-react";
+import { Receipt, RotateCcw, Search, Ban, Pencil, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/AppShell";
 import { ReceiptModal } from "@/components/pos/ReceiptModal";
+import { EditOrderDialog } from "@/components/pos/EditOrderDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatMoney } from "@/data/catalog";
@@ -47,7 +48,10 @@ const statusClass: Record<OrderStatus, string> = {
 };
 
 function OrdersPage() {
-  const { orders, voidOrder, refundOrder } = usePos();
+  const { orders, deletedOrders, voidOrder, refundOrder, canEditOrder, deleteOrderEntry, restoreOrderEntry, currentUser } = usePos();
+  const [editing, setEditing] = useState<Order | null>(null);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const isManager = currentUser?.role === "owner" || currentUser?.role === "superadmin";
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<OrderStatus | "All">("All");
   const [receipt, setReceipt] = useState<Order | null>(null);
@@ -145,7 +149,26 @@ function OrdersPage() {
                   <Button size="sm" variant="secondary" onClick={() => setReceipt(o)}>
                     <Receipt className="size-3.5" /> Receipt
                   </Button>
-                  {o.status !== "Voided" && o.status !== "Refunded" ? (
+                  {canEditOrder(o) ? (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => setEditing(o)}>
+                        <Pencil className="size-3.5" /> Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive"
+                        onClick={() => {
+                          if (!window.confirm(`Delete mistaken entry ${o.code}? Stock and balances will be rolled back. Use Void instead for official cancellations.`)) return;
+                          deleteOrderEntry(o.id);
+                          toast.success(`${o.code} deleted · stock and totals rolled back`);
+                        }}
+                      >
+                        <Trash2 className="size-3.5" /> Delete
+                      </Button>
+                    </>
+                  ) : null}
+                  {isManager && o.status !== "Voided" && o.status !== "Refunded" ? (
                     <>
                       <Button
                         size="sm"
@@ -189,6 +212,32 @@ function OrdersPage() {
         ) : null}
       </div>
 
+      {isManager && deletedOrders.length > 0 ? (
+        <div className="mt-6">
+          <Button variant="ghost" size="sm" onClick={() => setShowDeleted((v) => !v)}>
+            {showDeleted ? "Hide" : "Show"} deleted entries ({deletedOrders.length})
+          </Button>
+          {showDeleted ? (
+            <ul className="mt-2 divide-y divide-border rounded-2xl border border-border bg-card">
+              {deletedOrders.map((o) => (
+                <li key={o.id} className="flex items-center justify-between gap-3 px-4 py-2 text-sm">
+                  <span className="text-muted-foreground line-through">
+                    {o.code} · {o.customer} · {formatMoney(o.total)}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    deleted by {o.deletedBy ?? "—"} {o.deletedAt?.slice(0, 10)}
+                  </span>
+                  <Button size="sm" variant="secondary" onClick={() => { restoreOrderEntry(o.id); toast.success(`${o.code} restored`); }}>
+                    <Undo2 className="size-3.5" /> Restore
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+
+      <EditOrderDialog order={editing} onClose={() => setEditing(null)} />
       <ReceiptModal order={receipt} open={Boolean(receipt)} onOpenChange={() => setReceipt(null)} />
     </AppShell>
   );

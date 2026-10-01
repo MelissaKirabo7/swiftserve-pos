@@ -555,33 +555,16 @@ export function PosProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Initial load: staff list, session, shared shop state (bootstrapped once).
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await provisionStaff();
-      } catch {
-        /* already provisioned or offline */
-      }
-      try {
-        const staff = await listStaff();
-        if (!cancelled) {
-          setUsers(staff.map((s) => ({ ...s, passcode: "" })));
-        }
-      } catch {
-        /* offline */
-      }
-
-      await resolveCurrent();
-
+  // Fetch the shared shop state. Only possible with a signed-in session.
+  const loadRemote = useCallback(async () => {
+    const { data: session } = await supabase.auth.getSession();
+    if (!session.session) return;
       try {
         const { data } = await supabase
           .from("pos_state")
           .select("data, version")
           .eq("id", STATE_ID)
           .maybeSingle();
-        if (cancelled) return;
         const remote = normalize(data?.data);
         if (remote) {
           adopt(remote, data?.version ?? 0);
@@ -615,12 +598,34 @@ export function PosProvider({ children }: { children: ReactNode }) {
       } catch {
         setOnline(false);
       }
+  }, [adopt]);
+
+  // Initial load: staff list, session, shared shop state (bootstrapped once).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await provisionStaff();
+      } catch {
+        /* already provisioned or offline */
+      }
+      try {
+        const staff = await listStaff();
+        if (!cancelled) {
+          setUsers(staff.map((s) => ({ ...s, passcode: "" })));
+        }
+      } catch {
+        /* offline */
+      }
+
+      await resolveCurrent();
+      await loadRemote();
       if (!cancelled) setReady(true);
     })();
     return () => {
       cancelled = true;
     };
-  }, [adopt, resolveCurrent]);
+  }, [loadRemote, resolveCurrent]);
 
   // Live updates from every other device / session.
   useEffect(() => {
@@ -1065,12 +1070,13 @@ export function PosProvider({ children }: { children: ReactNode }) {
         if (error) return false;
         await loadUsers();
         await resolveCurrent();
+        await loadRemote();
         return true;
       } catch {
         return false;
       }
     },
-    [loadUsers, resolveCurrent],
+    [loadUsers, resolveCurrent, loadRemote],
   );
 
   const signOut = useCallback(() => {

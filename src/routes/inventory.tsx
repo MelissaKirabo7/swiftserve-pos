@@ -26,7 +26,7 @@ export const Route = createFileRoute("/inventory")({
       {
         name: "description",
         content:
-          "Track popcorn stock levels, edit prices inline, restock fast and catch low-stock items before they sell out.",
+          "Track Daddies stock levels, edit prices inline, restock fast and catch low-stock items before they sell out.",
       },
       { property: "og:title", content: "Inventory · Aquila's Daddies POS" },
       {

@@ -1,11 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   BarChart3,
   Boxes,
   LogOut,
   Menu,
-  Popcorn,
+  Store,
   ReceiptText,
   ScanBarcode,
   ShieldCheck,
@@ -63,7 +63,7 @@ function Brand() {
   return (
     <div className="flex items-center gap-2.5 px-1">
       <span className="grid size-9 place-items-center rounded-xl bg-sidebar-primary text-sidebar-primary-foreground">
-        <Popcorn className="size-5" />
+        <Store className="size-5" />
       </span>
       <span className="leading-tight">
         <span className="block font-display text-sm font-semibold text-sidebar-foreground">
@@ -95,9 +95,22 @@ function UserCard() {
 
 function SignInScreen() {
   const { users, signIn } = usePos();
-  const [name, setName] = useState(users[0]?.name ?? "");
+  const [name, setName] = useState("");
   const [passcode, setPasscode] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!name && users[0]) setName(users[0].name);
+  }, [users, name]);
+  const submit = async () => {
+    if (busy || !name) return;
+    setBusy(true);
+    setError("");
+    const ok = await signIn(name, passcode);
+    setBusy(false);
+    if (!ok) setError("Wrong passcode");
+    else setPasscode("");
+  };
 
   return (
     <div className="grid min-h-screen place-items-center bg-sidebar p-6">
@@ -111,6 +124,7 @@ function SignInScreen() {
             onChange={(e) => setName(e.target.value)}
             className="h-11 w-full rounded-xl border border-border bg-background px-3 text-sm"
           >
+            {users.length === 0 ? <option value="">Loading staff…</option> : null}
             {users.map((u) => (
               <option key={u.id} value={u.name}>
                 {u.name} · {ROLE_LABEL[u.role]}
@@ -127,7 +141,7 @@ function SignInScreen() {
             value={passcode}
             onChange={(e) => setPasscode(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !signIn(name, passcode)) setError("Wrong passcode");
+              if (e.key === "Enter") void submit();
             }}
             className="h-12 numeric text-lg"
           />
@@ -135,11 +149,10 @@ function SignInScreen() {
         {error ? <p className="text-xs font-medium text-destructive">{error}</p> : null}
         <Button
           className="h-12 w-full"
-          onClick={() => {
-            if (!signIn(name, passcode)) setError("Wrong passcode");
-          }}
+          disabled={busy || !name}
+          onClick={() => void submit()}
         >
-          Sign in
+          {busy ? "Signing in…" : "Sign in"}
         </Button>
         <p className="text-[11px] text-muted-foreground">
           Demo passcodes — Superadmin 0000 · Aquila 1111 · Jeremy 2222

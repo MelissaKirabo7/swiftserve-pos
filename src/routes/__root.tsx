@@ -82,7 +82,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { title: "Aquila's Daddies POS" },
       {
         name: "description",
-        content: "Point of sale, inventory and credit tracking for Aquila's Daddies popcorn.",
+        content: "Point of sale, inventory and credit tracking for Aquila's Daddies.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
