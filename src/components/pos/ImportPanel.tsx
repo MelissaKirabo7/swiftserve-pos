@@ -45,15 +45,15 @@ export function ImportPanel() {
   const validate = (rows: Row[]): Parsed => {
     const ok: Row[] = [];
     const errors: string[] = [];
-    rows.forEach((r, i) => {
+    rows.forEach((r, i): void => {
       const line = `Row ${i + 2}`;
       if (kind === "products") {
         const name = str(key(r, "name", "product", "item"));
         const price = num(key(r, "price", "sellingprice"));
         const stock = num(key(r, "stock", "qty", "quantity") ?? 0);
-        if (!name) return errors.push(`${line}: missing product name`);
-        if (!(price > 0)) return errors.push(`${line}: price must be a positive number`);
-        if (Number.isNaN(stock) || stock < 0) return errors.push(`${line}: stock is not valid`);
+        if (!name) { errors.push(`${line}: missing product name`); return; }
+        if (!(price > 0)) { errors.push(`${line}: price must be a positive number`); return; }
+        if (Number.isNaN(stock) || stock < 0) { errors.push(`${line}: stock is not valid`); return; }
         ok.push({
           name,
           price,
@@ -74,15 +74,15 @@ export function ImportPanel() {
         const seller = str(key(r, "seller", "rep", "salesrep")) || users.find((u) => u.role === "owner")?.name || "";
         const methodRaw = str(key(r, "method", "payment")) || "Cash";
         const method = METHODS.find((m) => m.toLowerCase() === methodRaw.toLowerCase());
-        if (!product) return errors.push(`${line}: product "${pname}" not found in inventory`);
-        if (!(qty > 0)) return errors.push(`${line}: quantity must be positive`);
-        if (!customer) return errors.push(`${line}: missing customer`);
-        if (!date) return errors.push(`${line}: date is not valid`);
-        if (!method) return errors.push(`${line}: unknown payment method "${methodRaw}"`);
+        if (!product) { errors.push(`${line}: product "${pname}" not found in inventory`); return; }
+        if (!(qty > 0)) { errors.push(`${line}: quantity must be positive`); return; }
+        if (!customer) { errors.push(`${line}: missing customer`); return; }
+        if (!date) { errors.push(`${line}: date is not valid`); return; }
+        if (!method) { errors.push(`${line}: unknown payment method "${methodRaw}"`); return; }
         const total = product.price * qty;
         const paidRaw = key(r, "amountpaid", "paid", "amount");
         const paid = paidRaw === undefined || str(paidRaw) === "" ? (method === "Credit" ? 0 : total) : num(paidRaw);
-        if (Number.isNaN(paid) || paid < 0) return errors.push(`${line}: amount paid is not valid`);
+        if (Number.isNaN(paid) || paid < 0) { errors.push(`${line}: amount paid is not valid`); return; }
         ok.push({ product, qty, customer, date, seller, method, paid });
       }
     });
@@ -110,7 +110,7 @@ export function ImportPanel() {
     for (const r of parsed.ok) {
       if (kind === "products") {
         const existing = products.find(
-          (p) => p.sku.toLowerCase() === String(r.sku).toLowerCase() || p.name.toLowerCase() === String(r.name).toLowerCase(),
+          (p) => p.sku.toLowerCase() === String(r['sku']).toLowerCase() || p.name.toLowerCase() === String(r['name']).toLowerCase(),
         );
         const rec = r as unknown as { name: string; price: number; cost: number; stock: number; category: string; sku: string; packets: number };
         if (existing) updateProduct(existing.id, { price: rec.price, cost: rec.cost || existing.cost, stock: rec.stock });

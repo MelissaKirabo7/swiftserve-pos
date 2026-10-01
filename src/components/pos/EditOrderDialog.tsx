@@ -34,10 +34,10 @@ export function EditOrderDialog({ order, onClose }: { order: Order | null; onClo
 
   const save = () => {
     if (!order) return;
-    if (live.length === 0) return toast.error("A sale needs at least one item — delete it instead.");
-    if (!customer.trim()) return toast.error("Customer is required");
+    if (live.length === 0) { toast.error("A sale needs at least one item — delete it instead."); return; }
+    if (!customer.trim()) { toast.error("Customer is required"); return; }
     const amount = Number(paid);
-    if (!Number.isFinite(amount) || amount < 0) return toast.error("Amount paid is not valid");
+    if (!Number.isFinite(amount) || amount < 0) { toast.error("Amount paid is not valid"); return; }
     updateOrder(order.id, {
       items: live,
       customer: customer.trim(),
