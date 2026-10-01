@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatMoney } from "@/data/catalog";
 import { ROLE_LABEL, findDuplicateGroups, usePos, type Role } from "@/lib/pos-store";
+import { Switch } from "@/components/ui/switch";
+import { ImportPanel } from "@/components/pos/ImportPanel";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -48,6 +50,8 @@ function AdminPage() {
     archives,
     delegateStock,
     returnStock,
+    settings,
+    setAllowRepEdits,
   } = usePos();
 
   const isSuper = currentUser?.role === "superadmin";
@@ -69,6 +73,21 @@ function AdminPage() {
       allow={["superadmin", "owner"]}
     >
       <div className="grid gap-4 xl:grid-cols-2">
+        <section className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-card p-4 shadow-tile xl:col-span-2">
+          <div>
+            <h2 className="font-display text-lg font-semibold">Allow Sales Reps to edit/correct their own sales</h2>
+            <p className="text-xs text-muted-foreground">Applies instantly on every device. Owner and superadmin can always correct sales.</p>
+          </div>
+          <Switch
+            checked={settings.allowRepEdits}
+            onCheckedChange={(v) => {
+              setAllowRepEdits(v);
+              toast.success(v ? "Reps can now correct their own sales" : "Rep corrections turned off");
+            }}
+            aria-label="Allow Sales Reps to edit/correct their own sales"
+          />
+        </section>
+        <ImportPanel />
         <section className="rounded-2xl border border-border bg-card p-4 shadow-tile">
           <h2 className="font-display text-sm font-semibold">System users</h2>
           <p className="text-[11px] text-muted-foreground">
