@@ -154,9 +154,6 @@ function SignInScreen() {
         >
           {busy ? "Signing in…" : "Sign in"}
         </Button>
-        <p className="text-[11px] text-muted-foreground">
-          Demo passcodes — Superadmin 0000 · Aquila 1111 · Jeremy 2222
-        </p>
       </div>
     </div>
   );
