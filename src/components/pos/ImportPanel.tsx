@@ -9,6 +9,32 @@ type Row = Record<string, unknown>;
 type Parsed = { ok: Row[]; errors: string[] };
 
 const METHODS: PaymentMethod[] = ["Cash", "Mobile Money", "Card", "Credit", "Split"];
+const METHOD_ALIASES: Record<string, PaymentMethod> = { partial: "Credit", momo: "Mobile Money", mobile: "Mobile Money", unpaid: "Credit" };
+
+const TEMPLATE_HEADERS = ["Date", "Customer", "Packets Bought", "Sale Value", "Profit", "Payment Method", "Amount Paid", "Outstanding Balance", "Status", "Seller", "Notes", "Product"];
+
+async function downloadTemplate() {
+  const XLSX = await import("xlsx");
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    TEMPLATE_HEADERS,
+    ["2026-10-02", "Walk-in", 2, 3000, 1000, "Cash", 3000, 0, "Paid", "Aquila", "", ""],
+    ["2026-10-02", "Denely", 1, 1500, 500, "Credit", 0, 1500, "Unpaid", "Jeremy", "", ""],
+    ["2026-10-02", "Emily", 3, 4500, 1500, "Partial", 2000, 2500, "Partial", "Jeremy", "", ""],
+  ]), "Sales Entry");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ["Name", "Price", "Cost", "Stock", "Category", "SKU", "Packets"],
+    ["Daddies Normal Pack", 1500, 1000, 100, "Packets", "", 1],
+  ]), "Items");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ["How to use"],
+    ["Sales Entry: one row per sale. Required: Date, Customer, Packets Bought, Payment Method (Cash, Credit, Partial, Mobile Money, Card)."],
+    ["Amount Paid: leave empty for full payment (Cash) or 0 (Credit). Partial = enter what was paid; the rest becomes the customer's debt."],
+    ["Product is optional; when empty, Daddies Normal Pack is used. Sale Value, Profit, Outstanding Balance and Status are worked out by the system."],
+    ["Items sheet: import it with 'Items & stock' to add or update products and stock."],
+  ]), "Instructions");
+  XLSX.writeFile(wb, "Aquilas_Daddies_Import_Template.xlsx");
+}
 
 function key(row: Row, ...names: string[]) {
   for (const k of Object.keys(row)) {
@@ -64,26 +90,30 @@ export function ImportPanel() {
           packets: num(key(r, "packets", "packs")) || 1,
         });
       } else {
-        const pname = str(key(r, "product", "item", "name", "sku"));
-        const product = products.find(
-          (p) => p.name.toLowerCase() === pname.toLowerCase() || p.sku.toLowerCase() === pname.toLowerCase(),
-        );
-        const qty = num(key(r, "qty", "quantity", "packets"));
+        if (!str(key(r, "customer", "client")) && !(num(key(r, "qty", "quantity", "packets", "packetsbought")) > 0)) return;
+        const pname = str(key(r, "product", "item", "sku"));
+        const fallback = products.find((p) => /normal/i.test(p.name)) ?? products.find((p) => p.packets === 1) ?? products[0];
+        const product = pname
+          ? products.find((p) => p.name.toLowerCase() === pname.toLowerCase() || p.sku.toLowerCase() === pname.toLowerCase())
+          : fallback;
+        const qty = num(key(r, "qty", "quantity", "packets", "packetsbought"));
         const customer = str(key(r, "customer", "client"));
         const date = toDate(key(r, "date"));
         const seller = str(key(r, "seller", "rep", "salesrep")) || users.find((u) => u.role === "owner")?.name || "";
-        const methodRaw = str(key(r, "method", "payment")) || "Cash";
-        const method = METHODS.find((m) => m.toLowerCase() === methodRaw.toLowerCase());
+        const methodRaw = str(key(r, "method", "payment", "paymentmethod")) || "Cash";
+        const method = METHODS.find((m) => m.toLowerCase() === methodRaw.toLowerCase()) ?? METHOD_ALIASES[methodRaw.toLowerCase()];
         if (!product) { errors.push(`${line}: product "${pname}" not found in inventory`); return; }
         if (!(qty > 0)) { errors.push(`${line}: quantity must be positive`); return; }
         if (!customer) { errors.push(`${line}: missing customer`); return; }
         if (!date) { errors.push(`${line}: date is not valid`); return; }
         if (!method) { errors.push(`${line}: unknown payment method "${methodRaw}"`); return; }
-        const total = product.price * qty;
-        const paidRaw = key(r, "amountpaid", "paid", "amount");
+        const saleValue = num(key(r, "salevalue", "total", "value"));
+        const unitPrice = saleValue > 0 ? saleValue / qty : product.price;
+        const total = unitPrice * qty;
+        const paidRaw = key(r, "amountpaid", "paid");
         const paid = paidRaw === undefined || str(paidRaw) === "" ? (method === "Credit" ? 0 : total) : num(paidRaw);
         if (Number.isNaN(paid) || paid < 0) { errors.push(`${line}: amount paid is not valid`); return; }
-        ok.push({ product, qty, customer, date, seller, method, paid });
+        ok.push({ product, qty, customer, date, seller, method, paid, unitPrice });
       }
     });
     return { ok, errors };
@@ -93,9 +123,11 @@ export function ImportPanel() {
     try {
       const XLSX = await import("xlsx");
       const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
-      const sheet = wb.Sheets[wb.SheetNames[0]!];
+      const preferred = kind === "sales" ? ["sales entry", "sales"] : ["items", "products", "inventory"];
+      const sheetName = wb.SheetNames.find((n) => preferred.includes(n.toLowerCase())) ?? wb.SheetNames[0]!;
+      const sheet = wb.Sheets[sheetName];
       if (!sheet) throw new Error("empty");
-      const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: "" });
+      const rows = XLSX.utils.sheet_to_json<Row>(sheet, { defval: "" }).filter((r) => Object.values(r).some((v) => str(v) !== ""));
       if (rows.length === 0) throw new Error("empty");
       setFile(f.name);
       setParsed(validate(rows));
@@ -116,11 +148,11 @@ export function ImportPanel() {
         if (existing) updateProduct(existing.id, { price: rec.price, cost: rec.cost || existing.cost, stock: rec.stock });
         else addProduct(rec);
       } else {
-        const rec = r as unknown as { product: (typeof products)[number]; qty: number; customer: string; date: string; seller: string; method: PaymentMethod; paid: number };
+        const rec = r as unknown as { product: (typeof products)[number]; unitPrice: number; qty: number; customer: string; date: string; seller: string; method: PaymentMethod; paid: number };
         const line: CartLine = {
           productId: rec.product.id,
           name: rec.product.name,
-          price: rec.product.price,
+          price: rec.unitPrice,
           qty: rec.qty,
           discount: 0,
           packets: rec.product.packets,
@@ -147,9 +179,10 @@ export function ImportPanel() {
     <section className="rounded-2xl border border-border bg-card p-4 shadow-tile xl:col-span-2">
       <h2 className="font-display text-lg font-semibold">Import from Excel or CSV</h2>
       <p className="mb-3 text-xs text-muted-foreground">
-        Items: name, price, cost, stock, category, sku. Sales: date, customer, product, qty, seller, method, amount paid.
+        Items: name, price, cost, stock, category, sku. Sales: use the "Sales Entry" sheet with Date, Customer, Packets Bought, Payment Method (Cash, Credit, Partial), Amount Paid, Seller. Product is optional.
       </p>
-      <div className="mb-3 flex gap-1.5">
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        <Button size="sm" variant="outline" onClick={() => void downloadTemplate()}>Download template</Button>
         {(["products", "sales"] as Kind[]).map((k) => (
           <Button key={k} size="sm" variant={k === kind ? "default" : "secondary"} onClick={() => { setKind(k); setParsed(null); }}>
             {k === "products" ? "Items & stock" : "Historical sales"}
