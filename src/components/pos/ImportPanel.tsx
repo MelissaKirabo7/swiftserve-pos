@@ -90,6 +90,7 @@ export function ImportPanel() {
           packets: num(key(r, "packets", "packs")) || 1,
         });
       } else {
+        if (!str(key(r, "customer", "client")) && !(num(key(r, "qty", "quantity", "packets", "packetsbought")) > 0)) return;
         const pname = str(key(r, "product", "item", "sku"));
         const fallback = products.find((p) => /normal/i.test(p.name)) ?? products.find((p) => p.packets === 1) ?? products[0];
         const product = pname
@@ -99,18 +100,20 @@ export function ImportPanel() {
         const customer = str(key(r, "customer", "client"));
         const date = toDate(key(r, "date"));
         const seller = str(key(r, "seller", "rep", "salesrep")) || users.find((u) => u.role === "owner")?.name || "";
-        const methodRaw = str(key(r, "method", "payment")) || "Cash";
+        const methodRaw = str(key(r, "method", "payment", "paymentmethod")) || "Cash";
         const method = METHODS.find((m) => m.toLowerCase() === methodRaw.toLowerCase()) ?? METHOD_ALIASES[methodRaw.toLowerCase()];
         if (!product) { errors.push(`${line}: product "${pname}" not found in inventory`); return; }
         if (!(qty > 0)) { errors.push(`${line}: quantity must be positive`); return; }
         if (!customer) { errors.push(`${line}: missing customer`); return; }
         if (!date) { errors.push(`${line}: date is not valid`); return; }
         if (!method) { errors.push(`${line}: unknown payment method "${methodRaw}"`); return; }
-        const total = product.price * qty;
+        const saleValue = num(key(r, "salevalue", "total", "value"));
+        const unitPrice = saleValue > 0 ? saleValue / qty : product.price;
+        const total = unitPrice * qty;
         const paidRaw = key(r, "amountpaid", "paid");
         const paid = paidRaw === undefined || str(paidRaw) === "" ? (method === "Credit" ? 0 : total) : num(paidRaw);
         if (Number.isNaN(paid) || paid < 0) { errors.push(`${line}: amount paid is not valid`); return; }
-        ok.push({ product, qty, customer, date, seller, method, paid });
+        ok.push({ product, qty, customer, date, seller, method, paid, unitPrice });
       }
     });
     return { ok, errors };
@@ -145,11 +148,11 @@ export function ImportPanel() {
         if (existing) updateProduct(existing.id, { price: rec.price, cost: rec.cost || existing.cost, stock: rec.stock });
         else addProduct(rec);
       } else {
-        const rec = r as unknown as { product: (typeof products)[number]; qty: number; customer: string; date: string; seller: string; method: PaymentMethod; paid: number };
+        const rec = r as unknown as { product: (typeof products)[number]; unitPrice: number; qty: number; customer: string; date: string; seller: string; method: PaymentMethod; paid: number };
         const line: CartLine = {
           productId: rec.product.id,
           name: rec.product.name,
-          price: rec.product.price,
+          price: rec.unitPrice,
           qty: rec.qty,
           discount: 0,
           packets: rec.product.packets,
